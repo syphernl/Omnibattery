@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.4] - 2026-05-02
+
+### Changed
+- **Centralized price-based discharge block computation**: The `_price_based_discharge_blocked` flag is now computed once per cycle in a dedicated `_apply_price_discharge_block()` method before mode dispatch, instead of being set inside each price handler (dynamic pricing and real-time price). This guarantees the flag is always set even when a handler returns early (override active, cheap-slot active, max_soc transition), preventing PD discharge under cheap prices in those edge cases.
+- **More specific blocking reason in logs**: When charging is not allowed, the log message now distinguishes between "charge delay active" and "time slot configuration" so users can immediately understand why charging was blocked.
+
 ## [1.7.3] - 2026-04-29
 
 ### Fixed
