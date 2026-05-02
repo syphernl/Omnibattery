@@ -488,12 +488,12 @@ class ChargeDischargeController:
             
             # Check if current time is within the slot
             if start_time <= current_time <= end_time:
-                _LOGGER.info("MATCH! Slot %d: %s IS ALLOWED - time %s within %s - %s (day: %s)",
+                _LOGGER.debug("MATCH! Slot %d: %s IS ALLOWED - time %s within %s - %s (day: %s)",
                             i+1, operation_type.upper(), current_time.strftime("%H:%M:%S"),
                             start_time.strftime("%H:%M:%S"), end_time.strftime("%H:%M:%S"), current_day)
                 return True
-        
-        _LOGGER.info("No matching time slot found - %s NOT ALLOWED (slots configured but none match)", operation_type.upper())
+
+        _LOGGER.debug("No matching time slot found - %s NOT ALLOWED (slots configured but none match)", operation_type.upper())
         return False
 
     def _get_active_slot(self) -> dict | None:
@@ -3114,24 +3114,10 @@ class ChargeDischargeController:
                 self.first_execution = True
 
         # Not in a cheap slot — fall through to normal PD control (no return here)
-
-        # Price-based discharge control: block discharge when current price is not above threshold
-        # Threshold = daily average price computed at 00:05 evaluation; fallback to max_price_threshold
-        if self.dp_price_discharge_control and not self.grid_charging_active and self.price_sensor:
-            price_state = self.hass.states.get(self.price_sensor)
-            if price_state is not None:
-                try:
-                    dp_current_price = float(price_state.state)
-                    dp_threshold = self._dp_daily_avg_price if self._dp_daily_avg_price is not None else self.max_price_threshold
-                    if dp_threshold is not None:
-                        self._price_based_discharge_blocked = not (dp_current_price > dp_threshold)
-                        if self._price_based_discharge_blocked:
-                            _LOGGER.debug(
-                                "Dynamic pricing: discharge BLOCKED by price control (%.4f <= threshold %.4f)",
-                                dp_current_price, dp_threshold,
-                            )
-                except (ValueError, TypeError):
-                    pass  # Cannot parse price → allow discharge (safe default)
+        # Note: ``_price_based_discharge_blocked`` is computed centrally in
+        # ``async_update_charge_discharge`` via ``_apply_price_discharge_block``
+        # before this handler runs, so the early ``return`` at the cheap-slot path
+        # above does not leave it unset for downstream enforcement.
 
     # =========================================================================
     # REAL-TIME PRICE: reactive charging based on current price every cycle
@@ -3194,18 +3180,19 @@ class ChargeDischargeController:
             current_price, threshold, price_is_cheap, self._realtime_price_charging,
         )
 
-        if self.rt_price_discharge_control and not self.grid_charging_active:
-            self._price_based_discharge_blocked = not (current_price > threshold)
-            if self._price_based_discharge_blocked:
-                _LOGGER.debug(
-                    "Real-time price: discharge BLOCKED by price control (%.4f <= %.4f)",
-                    current_price, threshold,
-                )
+        # Note: ``_price_based_discharge_blocked`` is set in
+        # ``async_update_charge_discharge`` via ``_apply_price_discharge_block``
+        # before this handler runs, so any early ``return`` above does not skip it.
 
         if price_is_cheap and not self._realtime_price_charging:
             if not self._is_operation_allowed(is_charging=True):
+                if self.charge_delay_enabled and self._is_charge_delayed():
+                    reason = "charge delay active"
+                else:
+                    reason = "time slot configuration"
                 _LOGGER.debug(
-                    "Real-time price: cheap price but charging NOT ALLOWED by time slot configuration",
+                    "Real-time price: cheap price but charging NOT ALLOWED by %s",
+                    reason,
                 )
             else:
                 # Evaluate whether charging is actually needed before starting
@@ -3364,6 +3351,59 @@ class ChargeDischargeController:
             },
         )
     
+    def _apply_price_discharge_block(self) -> None:
+        """Set ``_price_based_discharge_blocked`` from current price vs threshold.
+
+        Centralised so the flag is set every cycle BEFORE mode dispatch — even when
+        the mode handler returns early (override active, DP cheap-slot active,
+        max_soc transition, etc.). Previously the flag was set inside each handler
+        and any early ``return`` left it at the cycle-start ``False`` reset, letting
+        PD discharge under cheap prices.
+        """
+        mode = self.predictive_charging_mode
+
+        if mode == PREDICTIVE_MODE_DYNAMIC_PRICING:
+            if not self.dp_price_discharge_control or not self.price_sensor:
+                return
+            threshold = (
+                self._dp_daily_avg_price
+                if self._dp_daily_avg_price is not None
+                else self.max_price_threshold
+            )
+        elif mode == PREDICTIVE_MODE_REALTIME_PRICE:
+            if not self.rt_price_discharge_control or not self.price_sensor:
+                return
+            threshold = None
+            if self.average_price_sensor:
+                avg_state = self.hass.states.get(self.average_price_sensor)
+                if avg_state is not None:
+                    try:
+                        threshold = float(avg_state.state)
+                    except (ValueError, TypeError):
+                        pass
+            if threshold is None:
+                threshold = self.max_price_threshold
+        else:
+            return
+
+        if threshold is None:
+            return
+
+        price_state = self.hass.states.get(self.price_sensor)
+        if price_state is None:
+            return
+        try:
+            current_price = float(price_state.state)
+        except (ValueError, TypeError):
+            return
+
+        self._price_based_discharge_blocked = not (current_price > threshold)
+        if self._price_based_discharge_blocked:
+            _LOGGER.debug(
+                "Price-based discharge BLOCKED (current=%.4f <= threshold=%.4f, mode=%s)",
+                current_price, threshold, mode,
+            )
+
     async def async_update_charge_discharge(self, now=None):
         """Update the charge/discharge power of the batteries."""
         _LOGGER.debug("ChargeDischargeController: async_update_charge_discharge started.")
@@ -3431,8 +3471,13 @@ class ChargeDischargeController:
             # Proactively evaluate delay to keep ChargeDelaySensor populated
             self._is_charge_delayed()
 
-        # Reset price-based discharge block flag at start of each cycle
+        # Reset price-based discharge block flag at start of each cycle, then
+        # recompute it immediately so it is set BEFORE the mode handler runs.
+        # The mode handler may return early (override active, DP cheap-slot,
+        # max_soc transition); doing the computation here guarantees the flag
+        # is always available for the enforcement points downstream.
         self._price_based_discharge_blocked = False
+        self._apply_price_discharge_block()
 
         # === Predictive Grid Charging Logic (mode dispatch) ===
         if self.predictive_charging_enabled:
@@ -3455,12 +3500,13 @@ class ChargeDischargeController:
                     return
 
         # === Price-based discharge block: enforce BEFORE deadband / stale early-returns ===
-        # The DP/RT handlers set _price_based_discharge_blocked each cycle (line ~4355/4426).
-        # Without this guard the deadband and stale-sensor paths would return early without
-        # stopping a running discharge, leaving the battery draining until grid error grows
-        # large enough to exit the deadband.
+        # The flag is set centrally above by _apply_price_discharge_block, so it is
+        # already correct here regardless of whether the mode handler returned early.
+        # Without this guard the deadband and stale-sensor paths would return early
+        # without stopping a running discharge, leaving the battery draining until
+        # grid error grows large enough to exit the deadband.
         if self._price_based_discharge_blocked and self.previous_power < 0:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "ChargeDischargeController: Price-based discharge block active — "
                 "stopping discharge (was %.0fW), holding at 0W",
                 abs(self.previous_power),
@@ -3577,9 +3623,14 @@ class ChargeDischargeController:
             operation_allowed = self._is_operation_allowed(is_charging)
             if not operation_allowed:
                 if is_charging:
-                    _LOGGER.info("ChargeDischargeController: First execution - Charging NOT ALLOWED by time slot, starting at 0W")
+                    reason = (
+                        "charge delay active"
+                        if self.charge_delay_enabled and self._is_charge_delayed()
+                        else "time slot configuration"
+                    )
+                    _LOGGER.debug("ChargeDischargeController: First execution - Charging NOT ALLOWED by %s, starting at 0W", reason)
                 else:
-                    _LOGGER.info("ChargeDischargeController: First execution - Discharging NOT ALLOWED by time slot, starting at 0W")
+                    _LOGGER.debug("ChargeDischargeController: First execution - Discharging NOT ALLOWED by time slot, starting at 0W")
                 self.previous_power = 0
                 is_charging = False
                 # Initialize PD state at 0
@@ -3596,7 +3647,7 @@ class ChargeDischargeController:
 
             # Check price-based discharge block (e.g. RT price mode: cheap price blocks discharge)
             if not is_charging and self._price_based_discharge_blocked:
-                _LOGGER.info("ChargeDischargeController: First execution - Discharging NOT ALLOWED by price-based control, starting at 0W")
+                _LOGGER.debug("ChargeDischargeController: First execution - Discharging NOT ALLOWED by price-based control, starting at 0W")
                 self.previous_power = 0
                 self.error_integral = 0.0
                 self.previous_error = -(sensor_actual - active_target)
@@ -3883,9 +3934,14 @@ class ChargeDischargeController:
         operation_restricted = not self._is_operation_allowed(is_charging)
         if operation_restricted:
             if is_charging:
-                _LOGGER.info("ChargeDischargeController: Charging NOT ALLOWED by time slot configuration - controller paused")
+                reason = (
+                    "charge delay active"
+                    if self.charge_delay_enabled and self._is_charge_delayed()
+                    else "time slot configuration"
+                )
+                _LOGGER.debug("ChargeDischargeController: Charging NOT ALLOWED by %s - controller paused", reason)
             else:
-                _LOGGER.info("ChargeDischargeController: Discharging NOT ALLOWED by time slot configuration - controller paused")
+                _LOGGER.debug("ChargeDischargeController: Discharging NOT ALLOWED by time slot configuration - controller paused")
             new_power = 0
             is_charging = False  # Reset since we're forcing to 0
             self._active_discharge_batteries = []
@@ -3893,7 +3949,7 @@ class ChargeDischargeController:
 
         # Check price-based discharge control (set each cycle by pricing mode handlers)
         if not operation_restricted and self._price_based_discharge_blocked and not is_charging:
-            _LOGGER.info("ChargeDischargeController: Discharging NOT ALLOWED by price-based control - controller paused")
+            _LOGGER.debug("ChargeDischargeController: Discharging NOT ALLOWED by price-based control - controller paused")
             new_power = 0
             self._active_discharge_batteries = []
             self._active_charge_batteries = []
