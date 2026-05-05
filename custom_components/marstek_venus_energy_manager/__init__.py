@@ -3825,7 +3825,7 @@ class ChargeDischargeController:
         # Runs before capacity protection so the offset is already in _setpoint_offsets
         # when compute_active_target() is called; CP override wins automatically.
         if self._hourly_balance_mgr is not None:
-            await self._hourly_balance_mgr.async_process(sensor_actual)
+            await self._hourly_balance_mgr.async_process()
             active_target = self.compute_active_target()
 
         # CAPACITY PROTECTION MODE: When enabled and SOC is below threshold,
