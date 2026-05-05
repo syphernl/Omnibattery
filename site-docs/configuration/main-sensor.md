@@ -13,11 +13,7 @@ A Home Assistant sensor that measures power exchange with the grid (in **W** or 
     The sensor should update as fast as possible. The controller runs every **2.5 seconds** and makes decisions based on the most recent reading available — the older the reading, the less accurate the response.
 
     Home consumption can vary by several kilowatts in fractions of a second (appliance start-ups, oven, washing machine…). A sensor that reports every 10 seconds or more introduces a lag that causes the controller to react to a situation that no longer exists, leading to overshoot or unnecessary corrections.
-<<<<<<< patch-2
 
-=======
-    
->>>>>>> main
     **Recommended: 1–2 second update interval.** Devices like Shelly EM/EM3 support this natively.
 
 ### Automatic kW detection
@@ -28,10 +24,6 @@ If the sensor's `unit_of_measurement` attribute is `kW`, the integration multipl
 
 Enable **"Inverted meter sign"** if your sensor uses the opposite convention:
 
-<<<<<<< patch-2
-=======
-
->>>>>>> main
 | Convention | Import | Export |
 |---|---|---|
 | Standard (default) | Positive value | Negative value |
