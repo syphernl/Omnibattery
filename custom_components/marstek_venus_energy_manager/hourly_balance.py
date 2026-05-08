@@ -433,18 +433,28 @@ class HourlyBalanceManager:
             if abs(offset_w - self._last_offset_w) < hysteresis_w:
                 offset_w = self._last_offset_w
 
-        # If compensation is blocked, zero the offset so the PD controller
-        # doesn't chase an unreachable target. The integration (imp/exp)
-        # continues tracking so the correct offset will be applied once
-        # the block lifts.
+        # Prevent forced discharge when importing more than target. When deficit_wh < 0,
+        # it means the system is importing neto from the grid, indicating insufficient solar.
+        # In this case, forcing discharge (offset_w < 0) would drain batteries while the grid
+        # already supplies power — violating the principle that grid should cover demand when
+        # solar is insufficient. Clamping offset_w to 0 allows grid supply without discharge.
+        if deficit_wh < 0:
+            offset_w = max(offset_w, 0.0)
+
+        # All block reasons (solar_charge_delay, hysteresis, max_soc) only fire
+        # when offset > 0 (charging direction). When blocked, keep the positive
+        # offset active: charging is still rejected at hardware level, but the
+        # high setpoint prevents the PD from commanding discharge to cover house
+        # load — the grid supplies the house instead of depleting battery
+        # headroom. The integration (imp/exp) continues tracking so the correct
+        # offset will be applied once the block lifts.
         self._last_theoretical_offset_w = offset_w
         self._last_block_reason = self._get_compensation_block_reason(offset_w)
         if self._last_block_reason is not None:
             _LOGGER.debug(
-                "HourlyBalance: offset would be %.0fW but blocked by %s → applying 0W",
+                "HourlyBalance: offset %.0fW blocked by %s; keeping positive to prevent discharge",
                 offset_w, self._last_block_reason,
             )
-            offset_w = 0.0
 
         self._controller.set_setpoint_offset("hourly_balance", offset_w)
         self._last_offset_w = offset_w
@@ -511,11 +521,13 @@ class HourlyBalanceManager:
         return False
 
     def _get_compensation_block_reason(self, offset: float) -> str | None:
-        """Return a reason string if compensation is currently blocked, else None.
+        """Return a reason string if the positive offset is blocked, else None.
 
-        All checks apply only when offset > 0 (charging direction): charge
-        delay, hysteresis, and max_soc all prevent charging but not discharging,
-        so discharge corrections (offset < 0) are never blocked.
+        All checks apply only when offset > 0 (charging direction). When a
+        reason is returned, the caller keeps the positive offset active rather
+        than zeroing it, so the PD setpoint stays high and the battery does not
+        discharge to cover house load (grid supplies the house instead).
+        Discharge corrections (offset < 0) are never blocked here.
         Uses _charge_delay_status (kept current by the PD cycle) to avoid
         calling _is_charge_delayed() which has side-effects.
         """
