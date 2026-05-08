@@ -1886,21 +1886,45 @@ class ChargeDischargeController:
             if total_power <= combined_capacity * activation_threshold:
                 break
 
-        # Power hysteresis: can we remove the last battery added?
-        if len(selected) > 1 and len(previous_active) > 0:
-            last = selected[-1]
-            last_limit = last.max_charge_power if is_charging else last.max_discharge_power
-            capacity_without_last = combined_capacity - last_limit
-            second_limit = (
-                selected[-2].max_charge_power if is_charging else selected[-2].max_discharge_power
-            )
-            deactivation_threshold = (
-                max(MULTI_BATTERY_MIN_ACTIVATION, min(MULTI_BATTERY_MAX_ACTIVATION, crossover_w / second_limit))
-                - MULTI_BATTERY_HYSTERESIS_GAP
-            )
-            if (total_power <= capacity_without_last * deactivation_threshold
-                    and last not in previous_active):
-                selected.pop()
+        # Power hysteresis: avoid oscillating near the activation threshold.
+        if len(available_batteries) > 1 and previous_active:
+            # Case A — deactivation hysteresis: the loop dropped a previously-active battery.
+            # Only confirm its removal if power fell clearly below the activation threshold;
+            # otherwise re-add it so it stays active until the load genuinely drops.
+            for battery in previous_active:
+                if battery not in selected and battery in available_batteries:
+                    limit = battery.max_charge_power if is_charging else battery.max_discharge_power
+                    first_limit = (
+                        selected[0].max_charge_power if is_charging else selected[0].max_discharge_power
+                    ) if selected else limit
+                    act_thr = max(MULTI_BATTERY_MIN_ACTIVATION,
+                                  min(MULTI_BATTERY_MAX_ACTIVATION, crossover_w / first_limit))
+                    deact_thr = max(MULTI_BATTERY_MIN_ACTIVATION, act_thr - MULTI_BATTERY_HYSTERESIS_GAP)
+                    if total_power > combined_capacity * deact_thr:
+                        selected.append(battery)
+                        combined_capacity += limit
+
+            # Case B — activation hysteresis: the loop just added a battery that was not
+            # previously active.  Only commit to using it if power is clearly above the
+            # threshold; if it is near the boundary, keep a single battery to prevent
+            # rapid on/off cycling.
+            if len(selected) > 1:
+                last = selected[-1]
+                if last not in previous_active:
+                    last_limit = last.max_charge_power if is_charging else last.max_discharge_power
+                    capacity_without_last = combined_capacity - last_limit
+                    prev_limit = (
+                        selected[-2].max_charge_power if is_charging else selected[-2].max_discharge_power
+                    )
+                    act_thr_with_hyst = min(
+                        max(MULTI_BATTERY_MIN_ACTIVATION,
+                            min(MULTI_BATTERY_MAX_ACTIVATION, crossover_w / prev_limit))
+                        + MULTI_BATTERY_HYSTERESIS_GAP,
+                        MULTI_BATTERY_MAX_ACTIVATION,
+                    )
+                    if total_power <= capacity_without_last * act_thr_with_hyst:
+                        selected.pop()
+                        combined_capacity -= last_limit
 
         # Log when selection changes
         if set(selected) != set(previous_active):
