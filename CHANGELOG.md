@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.6] - 2026-05-08
+
+### Changed
+- **PD Target Grid Power range extended to ±2500 W**: The slider in the setup and options flows (Advanced PD Controller) and the number entity limits now accept values from −2500 W to +2500 W (previously −500 W to +500 W).
+
 ## [1.7.5] - 2026-05-08
 
 ### Added
