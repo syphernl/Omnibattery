@@ -1830,6 +1830,7 @@ CONF_DELAY_SOC_SETPOINT_ENABLED = "delay_soc_setpoint_enabled"
 DEFAULT_DELAY_SOC_SETPOINT_ENABLED = False
 CONF_DELAY_SOC_SETPOINT = "delay_soc_setpoint"
 DEFAULT_DELAY_SOC_SETPOINT = 50  # % — default when the setpoint is enabled
+DELAY_SOC_SETPOINT_HYSTERESIS = 3  # % — SOC must drop this far below setpoint before recharging
 
 # Hourly Net Balance
 CONF_ENABLE_HOURLY_BALANCE = "enable_hourly_balance"
@@ -1996,8 +1997,8 @@ CONFIG_NUMBER_DEFINITIONS = [
     {
         "key": CONF_TARGET_GRID_POWER,
         "name": "PD Target Grid Power",
-        "min": -500,
-        "max": 500,
+        "min": -2500,
+        "max": 2500,
         "step": 10,
         "unit": "W",
         "default": DEFAULT_TARGET_GRID_POWER,

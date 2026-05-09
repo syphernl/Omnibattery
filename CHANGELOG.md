@@ -2,14 +2,17 @@
 
 ## [1.7.6] - 2026-05-08
 
+### Changed
+- **Hourly net balance: added smart meter requirement notice**: The feature description now includes a warning that hourly net balance control is only beneficial when using electricity contracts with smart meters that perform hourly net balance calculation. Without hourly netting at the meter level, battery setpoint adjustments do not translate to cost savings. Notice added to all language translations (EN, ES, DE, FR, NL).
+- **PD Target Grid Power range extended to ±2500 W**: The slider in the setup and options flows (Advanced PD Controller) and the number entity limits now accept values from −2500 W to +2500 W (previously −500 W to +500 W).
+
 ### Fixed
+- **Multi-battery selection oscillates near the activation threshold**: The previous hysteresis logic only guarded deactivation (removing the last added battery if power dropped slightly below threshold), but had no guard on activation. In practice this caused batteries to rapidly turn on and off when load hovered near the crossover point. Replaced with a symmetric deadband: **Case A** (deactivation) — a previously-active battery dropped by the greedy loop is re-added unless power has fallen clearly below `activation_threshold − hysteresis_gap`; **Case B** (activation) — a newly-added battery is removed again unless power has risen clearly above `activation_threshold + hysteresis_gap`. Both cases cover all batteries in `previous_active`, not just the last one selected.
+- **Charge delay SOC setpoint oscillation**: When the SOC setpoint was enabled and the delay was active, any brief drop below the setpoint (due to home consumption) caused the system to immediately re-enable charging back to the setpoint, creating a charge/block oscillation loop. Fixed by adding a 3 % hysteresis band: once the setpoint has been reached and the delay becomes active, charging to the setpoint only resumes if the SOC falls at least 3 % below the configured setpoint threshold (`_delay_setpoint_reached` flag, reset daily).
 - **Hourly net balance: remove closed-hour history**: The Balance Neto sensor no longer exposes the `history` attribute and the manager no longer persists closed-hour entries. Only the current-hour accumulator is kept across restarts.
 - **Hourly net balance: clear offset state when disabled**: Turning off the Hourly Net Balance switch now clears both the controller setpoint offset and the manager's internal visible offset state (`offset_w`, `theoretical_offset_w`, and block reason). The same cleanup is used when the feature is disabled through options, manual mode, or outside active slots.
 - **Peak shaving takes priority over hourly net balance**: The PD controller now refreshes hourly net balance and peak shaving setpoint overrides before deadband and first-execution handling. This prevents an hourly net balance discharge command from being kept alive after peak shaving becomes SOC-limited; stale consumption readings also force a recalculation instead of maintaining an existing discharge while peak shaving is active.
 - **Hourly net balance: restore import compensation discharge**: Net import above the hourly target now produces a negative setpoint offset again, allowing the battery to discharge/export during the remaining minutes of the hour to bring the net balance back toward target. This fixes the regression where the offset was clamped to zero and the PD controller could keep charging despite accumulated hourly import.
-
-### Changed
-- **Hourly net balance: added smart meter requirement notice**: The feature description now includes a warning that hourly net balance control is only beneficial when using electricity contracts with smart meters that perform hourly net balance calculation. Without hourly netting at the meter level, battery setpoint adjustments do not translate to cost savings. Notice added to all language translations (EN, ES, DE, FR, NL).
 
 ## [1.7.5] - 2026-05-08
 
