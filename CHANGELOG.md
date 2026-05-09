@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.6] - 2026-05-08
+
+### Fixed
+- **Charge delay SOC setpoint oscillation**: When the SOC setpoint was enabled and the delay was active, any brief drop below the setpoint (due to home consumption) caused the system to immediately re-enable charging back to the setpoint, creating a charge/block oscillation loop. Fixed by adding a 3 % hysteresis band: once the setpoint has been reached and the delay becomes active, charging to the setpoint only resumes if the SOC falls at least 3 % below the configured setpoint threshold (`_delay_setpoint_reached` flag, reset daily).
+
 ## [1.7.5] - 2026-05-08
 
 ### Added

@@ -40,6 +40,7 @@ from .const import (
     DEFAULT_DELAY_SOC_SETPOINT_ENABLED,
     CONF_DELAY_SOC_SETPOINT,
     DEFAULT_DELAY_SOC_SETPOINT,
+    DELAY_SOC_SETPOINT_HYSTERESIS,
     CHARGE_EFFICIENCY,
     DELAY_SAFETY_FACTOR,
     T_START_FALLBACK_HOUR,
@@ -310,6 +311,7 @@ class ChargeDischargeController:
         self._balance_monitor_enabled = config_entry.data.get(CONF_ENABLE_BALANCE_MONITOR, DEFAULT_ENABLE_BALANCE_MONITOR)
         self._predictive_safety_margin_kwh: float = config_entry.data.get(CONF_PREDICTIVE_SAFETY_MARGIN_KWH, DEFAULT_PREDICTIVE_SAFETY_MARGIN_KWH)
         self._charge_delay_unlocked = False       # True when delay has been unlocked today
+        self._delay_setpoint_reached = False      # True once SOC first reached the setpoint
         self._balance_monitor = None  # Set from async_setup_entry after monitor is created
 
         # Hourly Net Balance
@@ -882,15 +884,25 @@ class ChargeDischargeController:
             self._charge_delay_status["state"] = "Charging allowed"
             return False
 
-        # SOC setpoint: delay only kicks in once all batteries reach the setpoint
+        # SOC setpoint: delay only kicks in once all batteries reach the setpoint.
+        # Hysteresis prevents oscillation: once the setpoint is reached, charging
+        # only resumes if SOC drops DELAY_SOC_SETPOINT_HYSTERESIS % below it.
         if self._delay_soc_setpoint_enabled:
             min_soc = min(
                 (c.data.get("battery_soc", 100) for c in self.coordinators if c.data),
                 default=100,
             )
-            if min_soc < self._delay_soc_setpoint:
-                self._charge_delay_status["state"] = "Charging to setpoint"
-                return False
+            if not self._delay_setpoint_reached:
+                if min_soc < self._delay_soc_setpoint:
+                    self._charge_delay_status["state"] = "Charging to setpoint"
+                    return False
+                self._delay_setpoint_reached = True
+            else:
+                low_threshold = self._delay_soc_setpoint - DELAY_SOC_SETPOINT_HYSTERESIS
+                if min_soc < low_threshold:
+                    self._delay_setpoint_reached = False
+                    self._charge_delay_status["state"] = "Charging to setpoint"
+                    return False
 
         # Evaluate delay conditions
         if self._should_delay_charge(target_soc):
@@ -3600,6 +3612,7 @@ class ChargeDischargeController:
                 if self._charge_delay_last_date is not None:
                     # Real day change: reset delay state
                     self._charge_delay_unlocked = False
+                    self._delay_setpoint_reached = False
                     self._solar_t_start = None
                 # On first cycle after HA restart (_charge_delay_last_date is None),
                 # _charge_delay_unlocked may have been restored from storage by
