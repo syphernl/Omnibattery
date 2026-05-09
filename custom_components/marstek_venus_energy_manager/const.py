@@ -1849,9 +1849,8 @@ _HOURLY_BALANCE_RAMP_IN_MIN = 5
 
 HOURLY_BALANCE_STORAGE_KEY = "hourly_balance"
 HOURLY_BALANCE_STORAGE_VERSION = 1
-HOURLY_BALANCE_HISTORY_MAX = 168       # 7 days
 HOURLY_BALANCE_FORCE_RECALC_REMAINING_MIN = 10  # bypass hysteresis near end of hour
-HOURLY_BALANCE_MIN_REMAINING_MIN = 5   # below this, offset = 0
+HOURLY_BALANCE_MIN_REMAINING_MIN = 1   # below this, offset = 0
 
 # External net balance sensor candidates (checked in order; first match wins).
 # Positive sensor value = net export to grid. Flip sign in _read_external_net_wh if reversed.
