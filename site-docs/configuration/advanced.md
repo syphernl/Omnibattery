@@ -1,6 +1,6 @@
 # Advanced options
 
-After configuring predictive charging, the wizard offers four additional optional steps that adjust the integration's behaviour in specific situations.
+After configuring predictive charging, the wizard offers five additional optional steps that adjust the integration's behaviour in specific situations.
 
 ---
 
@@ -43,6 +43,24 @@ Limits discharge when SOC drops below a threshold, covering only consumption pea
 See [Peak shaving](../features/peak-shaving.md) for how it works.
 
 ![Capacity protection configuration](../assets/screenshots/configuration/advanced-capacity-protection-config.png){ width="650"  style="display: block; margin: 0 auto;"}
+
+---
+
+## Hourly net balance
+
+Tracks grid import and export within each civil hour and adjusts the PD setpoint in real time to drive the net energy toward a configurable target. The default target is 0 Wh — net zero each hour — but you can shift it to allow a fixed import or target a fixed export.
+
+| Field | Description | Default |
+|---|---|---|
+| **Target net balance (kWh)** | Target net energy balance  (0=net zero, positive=net import, negative=net export) | `0 kWh`|
+| **Maximum offset (W)** | Maximum power offset the controller can apply (sum of all batteries) | `1000 W` |
+| **Net balance tolerance (kWh)** | Tolerance band around target (0=no correction) | `0 kWh` |
+| **Offset hysteresis (W)** | Minimum change in offset before corrections are applied (0=apply every cycle) | `15 W` |
+
+See [Hourly net balance](../features/hourly-net-balance.md) for how it works.
+
+![Hourly net balance warning](../assets/screenshots/configuration/hourly_net_balance_warning.png){ width="650"  style="display: block; margin: 0 auto;"}
+![Hourly net balance config](../assets/screenshots/configuration/hourly_net_balance_config.png){ width="650"  style="display: block; margin: 0 auto;"}
 
 ---
 
