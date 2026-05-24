@@ -963,10 +963,10 @@
         "name": "Batterijcycli (Berekend)"
       },
       "cell_delta": {
-        "name": "Celdelta"
+        "name": "Balans - Celdelta (bij 100%)"
       },
       "balance_status": {
-        "name": "Balansstatus",
+        "name": "Balans - Status",
         "state": {
           "green": "Gebalanceerd",
           "yellow": "Geringe onbalans",
@@ -976,7 +976,7 @@
         }
       },
       "delta_trend": {
-        "name": "Balans Trend",
+        "name": "Balans - Trend",
         "state": {
           "rising": "Stijgend",
           "stable": "Stabiel",
@@ -985,10 +985,10 @@
         }
       },
       "last_balance_read": {
-        "name": "Laatste Balansmeting"
+        "name": "Balans - Laatste Meting"
       },
       "delta_avg_4w": {
-        "name": "Delta Gemiddelde (4 metingen)"
+        "name": "Balans - Delta Gemiddelde (4 metingen)"
       },
       "balance_neto": {
         "name": "Nettosaldo",

@@ -973,10 +973,10 @@
         "name": "Battery Cycle Count (Calc)"
       },
       "cell_delta": {
-        "name": "Cell Delta"
+        "name": "Balance - Cell Delta (at 100%)"
       },
       "balance_status": {
-        "name": "Balance Status",
+        "name": "Balance - Status",
         "state": {
           "green": "Balanced",
           "yellow": "Minor imbalance",
@@ -986,7 +986,7 @@
         }
       },
       "delta_trend": {
-        "name": "Balance Trend",
+        "name": "Balance - Trend",
         "state": {
           "rising": "Rising",
           "stable": "Stable",
@@ -995,10 +995,10 @@
         }
       },
       "last_balance_read": {
-        "name": "Last Balance Reading"
+        "name": "Balance - Last Reading"
       },
       "delta_avg_4w": {
-        "name": "Delta Average (4 readings)"
+        "name": "Balance - Delta Average (4 readings)"
       },
       "balance_neto": {
         "name": "Net Balance",

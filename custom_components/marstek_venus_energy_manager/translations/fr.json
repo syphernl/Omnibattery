@@ -963,10 +963,10 @@
         "name": "Cycles Batterie (Calculé)"
       },
       "cell_delta": {
-        "name": "Delta Cellule"
+        "name": "Équilibrage - Delta Cellule (à 100%)"
       },
       "balance_status": {
-        "name": "État d'Équilibrage",
+        "name": "Équilibrage - État",
         "state": {
           "green": "Équilibré",
           "yellow": "Déséquilibre mineur",
@@ -976,7 +976,7 @@
         }
       },
       "delta_trend": {
-        "name": "Tendance d'Équilibrage",
+        "name": "Équilibrage - Tendance",
         "state": {
           "rising": "Croissante",
           "stable": "Stable",
@@ -985,10 +985,10 @@
         }
       },
       "last_balance_read": {
-        "name": "Dernière Lecture d'Équilibrage"
+        "name": "Équilibrage - Dernière Lecture"
       },
       "delta_avg_4w": {
-        "name": "Delta Moyen (4 lectures)"
+        "name": "Équilibrage - Delta Moyen (4 lectures)"
       },
       "balance_neto": {
         "name": "Bilan Net",

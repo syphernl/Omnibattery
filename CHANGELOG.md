@@ -9,6 +9,7 @@
 ### Changed
 - **Charge 100% revamped**: Normal 100% charging now uses a voltage-only profile. It throttles to 100 W from `max_cell_voltage >= 3.45 V`, pauses at 3.55 V for a 60 s `delta_V` reading, then discharges at 25 W to 3.42 V before releasing control.
 - **Dynamic Pricing: integration selector switched to dropdown**: The price integration picker in the setup and options flows now renders as a compact dropdown instead of a vertical radio list, keeping the form short as more providers are added.
+- **Balance sensor names regrouped under a `Balance - …` prefix**: The five cell-balance diagnostic sensors (`Cell Delta`, `Balance Status`, `Balance Trend`, `Last Balance Reading`, `Delta Average (4 readings)`) were renamed across all six translation files so they sort together in the HA UI: `Balance - Cell Delta (at 100%)`, `Balance - Status`, `Balance - Trend`, `Balance - Last Reading`, and `Balance - Delta Average (4 readings)`. `Cell Delta` also gained the `(at 100%)` qualifier to make explicit that the reading is captured at full charge. Translation keys and `entity_id`s are unchanged.
 
 ### Fixed
 - **Venus A manual-mode power entities still capped at 1200 W**: `MAX_POWER_BY_VERSION["vA"]` was already raised to 1500 W for the config flow and PD calculations, but the `set_charge_power`, `set_discharge_power`, `max_charge_power`, and `max_discharge_power` number entities in `NUMBER_DEFINITIONS_VA` were still hard-capped at 1200 W. Raised to 1500 W so the manual-mode sliders match the configured hardware limit.
