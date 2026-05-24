@@ -3,10 +3,12 @@
 ## Unreleased
 
 ### Added
-- **Active balance mode**: Added a per-battery active balancing mode that charges at 50 W to 3.55 V, waits 60 s to measure `delta_V`, cycles with 25 W discharge until `delta_V <= 0.03 V`, persists its phase across restarts, and performs a final 25 W discharge to 3.42 V before completing.
+- **Active balance mode**: Added a per-battery active balancing mode that charges at 50 W to 3.58 V, waits 60 s to measure `delta_V`, cycles with 25 W discharge until `delta_V <= 0.03 V`, persists its phase across restarts, and performs a final 25 W discharge to 3.42 V before completing.
+- **Dynamic Pricing: EPEX Spot support (e.g. aWATTar)**: New price integration option for sensors that expose hourly prices under a `data` attribute as a list of `{start_time, end_time, price_per_kwh}` entries (€/kWh). Reuses the same cheap-hour scheduling and price-based discharge gating as the existing Nordpool/PVPC/CKW integrations.
 
 ### Changed
 - **Charge 100% revamped**: Normal 100% charging now uses a voltage-only profile. It throttles to 100 W from `max_cell_voltage >= 3.45 V`, pauses at 3.55 V for a 60 s `delta_V` reading, then discharges at 25 W to 3.42 V before releasing control.
+- **Dynamic Pricing: integration selector switched to dropdown**: The price integration picker in the setup and options flows now renders as a compact dropdown instead of a vertical radio list, keeping the form short as more providers are added.
 
 ### Fixed
 - **Venus A manual-mode power entities still capped at 1200 W**: `MAX_POWER_BY_VERSION["vA"]` was already raised to 1500 W for the config flow and PD calculations, but the `set_charge_power`, `set_discharge_power`, `max_charge_power`, and `max_discharge_power` number entities in `NUMBER_DEFINITIONS_VA` were still hard-capped at 1200 W. Raised to 1500 W so the manual-mode sliders match the configured hardware limit.
