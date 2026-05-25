@@ -465,7 +465,7 @@ class ActiveBalanceModeManager:
             coordinator.active_balance_mode_cutoff_applied = True
             _LOGGER.info(
                 "%s: active balance mode raised software max_soc to 100%% "
-                "(v3 â€” no hardware cutoff register)",
+                "(v3 — no hardware cutoff register)",
                 coordinator.name,
             )
         else:

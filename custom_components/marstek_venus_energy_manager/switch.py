@@ -598,8 +598,8 @@ class ChargeDelaySwitch(SwitchEntity):
 class ExcludedDeviceEnabledSwitch(SwitchEntity):
     """Switch to enable/disable an individual excluded device at runtime.
 
-    ON  = Device is active â€” its power affects battery charge/discharge calculations.
-    OFF = Device is ignored â€” battery sees raw home sensor power for this device.
+    ON  = Device is active — its power affects battery charge/discharge calculations.
+    OFF = Device is ignored — battery sees raw home sensor power for this device.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, index: int) -> None:
@@ -679,7 +679,7 @@ class ExcludedDeviceSolarSurplusSwitch(SwitchEntity):
     """Switch to toggle solar surplus priority for an excluded device at runtime.
 
     ON  = Battery does NOT charge with solar surplus while this device is consuming
-          (solar goes to the device first â€” EV/priority mode).
+          (solar goes to the device first — EV/priority mode).
     OFF = Battery charges normally with solar surplus regardless of this device.
     """
 
