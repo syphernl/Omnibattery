@@ -94,7 +94,6 @@ from .const import (
     CONF_METER_INVERTED,
     CONF_PREDICTIVE_SAFETY_MARGIN_KWH,
     DEFAULT_PREDICTIVE_SAFETY_MARGIN_KWH,
-    CONF_ACTIVE_BALANCE_MODE_ENABLED,
     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
     DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
 )
@@ -322,7 +321,6 @@ class MarstekVenusConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
                 DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
             )
-            merged[CONF_ACTIVE_BALANCE_MODE_ENABLED] = user_input.get(CONF_ACTIVE_BALANCE_MODE_ENABLED, False)
             self.battery_configs.append(merged)
             self.battery_index += 1
 
@@ -349,7 +347,6 @@ class MarstekVenusConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required("backup_offgrid_threshold", default=50):
                         NumberSelector(NumberSelectorConfig(min=0, max=500, step=10, unit_of_measurement="W", mode=NumberSelectorMode.SLIDER)),
                     vol.Required(CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED, default=DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED): bool,
-                    vol.Required(CONF_ACTIVE_BALANCE_MODE_ENABLED, default=False): bool,
                 }
             ),
             description_placeholders={"battery_num": str(battery_num)},
@@ -1614,7 +1611,6 @@ class OptionsFlowHandler(OptionsFlow):
                     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
                     DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
                 )
-                merged[CONF_ACTIVE_BALANCE_MODE_ENABLED] = user_input.get(CONF_ACTIVE_BALANCE_MODE_ENABLED, False)
                 self.battery_configs.append(merged)
                 self.battery_index += 1
 
@@ -1638,7 +1634,6 @@ class OptionsFlowHandler(OptionsFlow):
                         CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
                         DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
                     ),
-                    CONF_ACTIVE_BALANCE_MODE_ENABLED: current_battery.get(CONF_ACTIVE_BALANCE_MODE_ENABLED, False),
                 }
             else:
                 defaults = {
@@ -1650,7 +1645,6 @@ class OptionsFlowHandler(OptionsFlow):
                     "charge_hysteresis_percent": 5,
                     "backup_offgrid_threshold": 50,
                     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED: DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
-                    CONF_ACTIVE_BALANCE_MODE_ENABLED: False,
                 }
         except Exception as e:
             _LOGGER.error("Error in options flow battery_limits step: %s", e, exc_info=True)
@@ -1674,7 +1668,6 @@ class OptionsFlowHandler(OptionsFlow):
                     vol.Required("backup_offgrid_threshold", default=defaults["backup_offgrid_threshold"]):
                         NumberSelector(NumberSelectorConfig(min=0, max=500, step=10, unit_of_measurement="W", mode=NumberSelectorMode.SLIDER)),
                     vol.Required(CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED, default=defaults[CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED]): bool,
-                    vol.Required(CONF_ACTIVE_BALANCE_MODE_ENABLED, default=defaults[CONF_ACTIVE_BALANCE_MODE_ENABLED]): bool,
                 }
             ),
             description_placeholders={"battery_num": str(battery_num)},
