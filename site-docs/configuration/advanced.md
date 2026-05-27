@@ -8,6 +8,11 @@ After configuring predictive charging, the wizard offers five additional optiona
 
 Forces a **100% charge once a week** for cell balancing. You only need to select the day of the week.
 
+| Field | Description | Default |
+|---|---|---|
+| **Day of the week** | On this day the battery will charge to 100% for cell balancing | — |
+| **Enable cell balance monitor** | If checked active cell balancing will be activated (this can be *slow*) | Disabled |
+
 See [Weekly full charge](../features/weekly-full-charge.md) for how it works.
 
 ![Weekly full charge configuration](../assets/screenshots/configuration/advanced-weekly-full-charge-config.png){ width="650"  style="display: block; margin: 0 auto;"}
@@ -20,8 +25,10 @@ Delays morning grid charging while the expected solar production can cover the r
 
 | Field | Description | Default |
 |---|---|---|
-| **Safety margin** | Minutes before sunset by which charging must be complete | 60 min |
+| **Safety margin (h)** | Hours before sunset by which charging must be complete | 1 h |
 | **Solar forecast sensor** | Only if not configured in the initial setup step | — |
+| **Enable minimum SOC before delay** | if enabled battery will charge to configured SOC before solar charge delay | Disabled |
+| **Minimum SOC (%)** | Battery SOC to reach before solar charge delay kicks in | — |
 
 A larger margin (e.g. 180 min) unlocks grid charging earlier in the day; a smaller margin waits longer for the sun to cover the energy.
 
@@ -37,8 +44,8 @@ Limits discharge when SOC drops below a threshold, covering only consumption pea
 
 | Field | Description | Default | Range |
 |---|---|---|---|
-| **SOC threshold** | Protection activates below this % | `30 %` | `20-100 %` |
-| **Peak power limit** | Maximum consumption the battery covers; the excess falls to the grid | `2500 W` | `500-10000 W` |
+| **SOC threshold (%)** | Protection activates below this % | `30 %` | `20-100 %` |
+| **Peak limit (W)** | Maximum consumption the battery covers; the excess falls to the grid | `2500 W` | `500-10000 W` |
 
 See [Peak shaving](../features/peak-shaving.md) for how it works.
 
