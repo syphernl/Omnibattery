@@ -73,21 +73,33 @@
       },
       "add_time_slot": {
         "title": "Time slot {slot_num}",
-        "description": "Define a time slot where batteries will be ALLOWED to discharge. Outside this slot, they will not discharge.",
+        "description": "Define when and how the batteries are allowed to operate. The ticks control each direction, SOC and power. Manual mode forces an exact power, bypassing the PD algorithm.",
         "data": {
           "start_time": "Start time",
           "end_time": "End time",
           "days": "Days of the week",
-          "apply_to_charge": "Apply also to charging",
-          "target_grid_power": "Target Grid Power (W)"
+          "battery_scope": "Target battery",
+          "allow_charge": "Allow charge",
+          "allow_discharge": "Allow discharge",
+          "soc_override_enabled": "Override slot SOC max/min",
+          "power_override_enabled": "Override slot max charge/discharge power",
+          "mode": "Operation mode"
         },
         "data_description": {
-          "start_time": "Start time of the slot (24h format)",
-          "end_time": "End time of the slot (24h format)",
-          "days": "Days when this slot applies",
-          "apply_to_charge": "If checked, the slot will also restrict charging (battery will only charge during this slot)",
-          "target_grid_power": "Grid power the controller regulates toward during this slot. 0W = zero grid flow (default). Negative = slight export (e.g. -150W). Positive = allow slight import."
+          "start_time": "Slot start time (24h). Midnight crossing supported.",
+          "end_time": "Slot end time (24h).",
+          "days": "Days when this slot applies.",
+          "battery_scope": "Select 'all' to apply to every battery, or pick a specific one.",
+          "allow_charge": "If checked, charge is allowed during the slot. If NO slot allows charge, charge is unrestricted by default.",
+          "allow_discharge": "If checked, discharge is allowed during the slot. If NO slot allows discharge, discharge is unrestricted by default.",
+          "soc_override_enabled": "If checked, the slot overrides the battery's max/min SOC inside the window.",
+          "power_override_enabled": "If checked, the slot limits or forces the max power.",
+          "mode": "PD: the predictive algorithm caps power using the slot value. Manual: forced discharge or charge at the configured power."
         }
+      },
+      "add_time_slot_details": {
+        "title": "Slot {slot_num} details",
+        "description": "Configure SOC and/or power limits per battery. Every battery has its own sliders. Mapping: {battery_map}. SOC range: 12–100%. Power range: 100 W up to each battery's hardware max."
       },
       "add_more_slots": {
         "title": "Add more time slots",
@@ -331,8 +343,10 @@
       "cannot_connect": "Cannot connect to the battery. Check the IP address and that the battery is accessible on the network.",
       "sensor_not_found": "Solar forecast sensor does not exist. Verify the sensor is available.",
       "invalid_unit": "Solar forecast sensor must have 'kWh' or 'Wh' as unit.",
-      "overlapping_slots": "This time slot overlaps with an existing one. Adjust the times or days.",
+      "overlapping_slots": "This time slot overlaps with an existing one for the same battery. Adjust the times, days, or battery scope.",
       "midnight_crossing": "Start time must be before end time. For overnight periods, create two separate slots (e.g., 22:00-23:59 and 00:00-06:00).",
+      "slot_does_nothing": "The slot must allow at least one direction (charge or discharge).",
+      "manual_requires_power": "Manual mode requires the power override tick to be enabled.",
       "no_price_data": "Selected sensor does not have the expected price attributes. Nordpool: needs `raw_today` attribute. PVPC: needs `price_00h` … `price_23h` attributes. CKW: needs `prices` attribute with a list of slots. EPEX: needs `data` attribute with a list of slots. ENTSO-e: needs `prices_today` attribute with a list of slots."
     },
     "abort": {
@@ -429,21 +443,33 @@
       },
       "add_time_slot": {
         "title": "Time slot {slot_num}",
-        "description": "Define or modify a time slot where batteries will be ALLOWED to discharge.",
+        "description": "Define when and how the batteries are allowed to operate. The ticks control each direction, SOC and power. Manual mode forces an exact power, bypassing the PD algorithm.",
         "data": {
           "start_time": "Start time",
           "end_time": "End time",
           "days": "Days of the week",
-          "apply_to_charge": "Apply also to charging",
-          "target_grid_power": "Target Grid Power (W)"
+          "battery_scope": "Target battery",
+          "allow_charge": "Allow charge",
+          "allow_discharge": "Allow discharge",
+          "soc_override_enabled": "Override slot SOC max/min",
+          "power_override_enabled": "Override slot max charge/discharge power",
+          "mode": "Operation mode"
         },
         "data_description": {
-          "start_time": "Start time of the slot (24h format)",
-          "end_time": "End time of the slot (24h format)",
-          "days": "Days when this slot applies",
-          "apply_to_charge": "If checked, the slot will also restrict charging (battery will only charge during this slot)",
-          "target_grid_power": "Grid power the controller regulates toward during this slot. 0W = zero grid flow (default). Negative = slight export (e.g. -150W). Positive = allow slight import."
+          "start_time": "Slot start time (24h). Midnight crossing supported.",
+          "end_time": "Slot end time (24h).",
+          "days": "Days when this slot applies.",
+          "battery_scope": "Select 'all' to apply to every battery, or pick a specific one.",
+          "allow_charge": "If checked, charge is allowed during the slot. If NO slot allows charge, charge is unrestricted by default.",
+          "allow_discharge": "If checked, discharge is allowed during the slot. If NO slot allows discharge, discharge is unrestricted by default.",
+          "soc_override_enabled": "If checked, the slot overrides the battery's max/min SOC inside the window.",
+          "power_override_enabled": "If checked, the slot limits or forces the max power.",
+          "mode": "PD: the predictive algorithm caps power using the slot value. Manual: forced discharge or charge at the configured power."
         }
+      },
+      "add_time_slot_details": {
+        "title": "Slot {slot_num} details",
+        "description": "Configure SOC and/or power limits per battery. Every battery has its own sliders. Mapping: {battery_map}. SOC range: 12–100%. Power range: 100 W up to each battery's hardware max."
       },
       "add_more_slots": {
         "title": "Add more time slots",
@@ -687,8 +713,10 @@
       "cannot_connect": "Cannot connect to the battery. Check the IP address and that the battery is accessible on the network.",
       "sensor_not_found": "Solar forecast sensor does not exist. Verify the sensor is available.",
       "invalid_unit": "Solar forecast sensor must have 'kWh' or 'Wh' as unit.",
-      "overlapping_slots": "This time slot overlaps with an existing one. Adjust the times or days.",
-      "midnight_crossing": "Start time must be before end time. For overnight periods, create two separate slots (e.g., 22:00-23:59 and 00:00-06:00)."
+      "overlapping_slots": "This time slot overlaps with an existing one for the same battery. Adjust the times, days, or battery scope.",
+      "midnight_crossing": "Start time must be before end time. For overnight periods, create two separate slots (e.g., 22:00-23:59 and 00:00-06:00).",
+      "slot_does_nothing": "The slot must allow at least one direction (charge or discharge).",
+      "manual_requires_power": "Manual mode requires the power override tick to be enabled."
     }
   },
   "selector": {
@@ -701,6 +729,17 @@
         "fri": "Friday",
         "sat": "Saturday",
         "sun": "Sunday"
+      }
+    },
+    "slot_mode": {
+      "options": {
+        "pd": "PD (predictive algorithm)",
+        "manual": "Manual (forced power)"
+      }
+    },
+    "slot_battery_scope": {
+      "options": {
+        "all": "All batteries"
       }
     },
     "predictive_charging_mode": {

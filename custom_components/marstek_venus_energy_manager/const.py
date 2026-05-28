@@ -1797,6 +1797,37 @@ CONF_SOLAR_FORECAST_SENSOR = "solar_forecast_sensor"
 CONF_HOUSEHOLD_CONSUMPTION_SENSOR = "household_consumption_sensor"
 CONF_MAX_CONTRACTED_POWER = "max_contracted_power"
 
+# Time slots (operation slots) — v3 schema keys
+CONF_TIME_SLOTS = "no_discharge_time_slots"  # legacy key, kept for compat
+CONF_SLOT_START_TIME = "start_time"
+CONF_SLOT_END_TIME = "end_time"
+CONF_SLOT_DAYS = "days"
+CONF_SLOT_ENABLED = "enabled"
+CONF_SLOT_BATTERY_SCOPE = "battery_scope"
+CONF_SLOT_ALLOW_CHARGE = "allow_charge"
+CONF_SLOT_ALLOW_DISCHARGE = "allow_discharge"
+CONF_SLOT_SOC_OVERRIDE_ENABLED = "soc_override_enabled"
+CONF_SLOT_SOC_MAX = "soc_max"
+CONF_SLOT_SOC_MIN = "soc_min"
+CONF_SLOT_POWER_OVERRIDE_ENABLED = "power_override_enabled"
+CONF_SLOT_MAX_CHARGE_POWER_W = "max_charge_power_w"
+CONF_SLOT_MAX_DISCHARGE_POWER_W = "max_discharge_power_w"
+CONF_SLOT_MODE = "mode"
+
+SLOT_BATTERY_SCOPE_ALL = "all"
+SLOT_MODE_PD = "pd"
+SLOT_MODE_MANUAL = "manual"
+
+DEFAULT_SLOT_BATTERY_SCOPE = SLOT_BATTERY_SCOPE_ALL
+DEFAULT_SLOT_ALLOW_CHARGE = False
+DEFAULT_SLOT_ALLOW_DISCHARGE = True
+DEFAULT_SLOT_SOC_OVERRIDE_ENABLED = False
+DEFAULT_SLOT_POWER_OVERRIDE_ENABLED = False
+DEFAULT_SLOT_MODE = SLOT_MODE_PD
+DEFAULT_SLOT_SOC_MIN_FLOOR = 12
+DEFAULT_SLOT_SOC_MAX_CEILING = 100
+MAX_TIME_SLOTS = 8
+
 # Default base consumption fallback (kWh/day)
 DEFAULT_BASE_CONSUMPTION_KWH = 5.0  # Fallback when no consumption history available
 

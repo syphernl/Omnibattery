@@ -239,6 +239,10 @@ class ChargeDischargeController:
         # Alias to the tracker's internal dict for backward-compat with sensor.py diagnostics
         self._non_responsive_batteries = self._non_responsive.batteries
 
+        # Coordinators currently owned by a manual time-slot this cycle.
+        # PD/predictive logic must not touch these — _set_battery_power short-circuits.
+        self._manual_slot_owned: set = set()
+
         # Backup function cooldown: prevents re-entering PD control immediately after offgrid load drops.
         # Format: coordinator -> datetime (UTC) until which the battery stays excluded
         self._backup_cooldown_until: dict = {}
@@ -884,16 +888,124 @@ class ChargeDischargeController:
 
     async def _handle_active_balance_mode(self) -> None:
         await self._active_balance_mgr._handle_active_balance_mode()
+    def _slot_manual_direction_for(self, slot: dict | None, coordinator) -> tuple[str, int] | None:
+        """Return (direction, power_w) when `slot` is a valid manual single-direction
+        slot for `coordinator`, or None.
+        """
+        if not slot or slot.get("mode") != "manual":
+            return None
+        if not slot.get("power_override_enabled"):
+            return None
+        allow_c = bool(slot.get("allow_charge"))
+        allow_d = bool(slot.get("allow_discharge"))
+        if allow_c and allow_d:
+            return None  # ambiguous: degrade to PD
+        limits = self._slot_battery_limits(slot, coordinator)
+        if allow_d:
+            val = limits.get("max_discharge_power_w")
+            if val is None:
+                return None
+            return ("discharge", int(val))
+        if allow_c:
+            val = limits.get("max_charge_power_w")
+            if val is None:
+                return None
+            return ("charge", int(val))
+        return None
+
+    async def _try_apply_manual_slot(self) -> None:
+        """Drive batteries with an active manual time slot directly, bypassing PD.
+
+        Manual slots take a battery off the PD/predictive control path for the
+        cycle. Safety blockers (min/max SOC, EV pause, active balance) still
+        apply — if a safety block is set, the manual write is skipped.
+        """
+        self._manual_slot_owned = set()
+        for coord in self.coordinators:
+            if not coord.is_available:
+                continue
+            if self._is_active_balance_mode_running(coord):
+                continue
+            if self._is_backup_function_active(coord):
+                continue
+
+            slot = self._get_active_slot(coord, "any")
+            manual = self._slot_manual_direction_for(slot, coord)
+            if manual is None:
+                if slot and slot.get("mode") == "manual" \
+                   and bool(slot.get("allow_charge")) and bool(slot.get("allow_discharge")):
+                    _LOGGER.warning(
+                        "[%s] Manual slot has both charge and discharge allowed — falling back to PD",
+                        coord.name,
+                    )
+                continue
+            direction, power = manual
+
+            charge_blockers = self.get_charge_blockers(coord)
+            discharge_blockers = self.get_discharge_blockers(coord)
+            # Time-slot blockers don't apply against the slot that owns the battery.
+            charge_safety = {k: v for k, v in charge_blockers.items() if k != "time_slot_charge"}
+            discharge_safety = {k: v for k, v in discharge_blockers.items() if k != "time_slot_discharge"}
+            if direction == "charge" and charge_safety:
+                _LOGGER.debug(
+                    "[%s] Manual slot charge skipped — safety blockers: %s",
+                    coord.name, ", ".join(charge_safety.keys()),
+                )
+                continue
+            if direction == "discharge" and discharge_safety:
+                _LOGGER.debug(
+                    "[%s] Manual slot discharge skipped — safety blockers: %s",
+                    coord.name, ", ".join(discharge_safety.keys()),
+                )
+                continue
+
+            if direction == "charge":
+                feedback = await coord.write_power_atomic(0, power, 1)
+            else:
+                feedback = await coord.write_power_atomic(power, 0, 2)
+
+            if feedback is None:
+                _LOGGER.warning("[%s] Manual slot write failed", coord.name)
+                continue
+
+            self._manual_slot_owned.add(coord)
+            _LOGGER.debug(
+                "[%s] Manual slot active: direction=%s power=%dW",
+                coord.name, direction, power,
+            )
+
+    def _is_manual_slot_owned(self, coordinator) -> bool:
+        return coordinator in self._manual_slot_owned
+
+    def _apply_slot_power_ceiling(self, coordinator, is_charging: bool, current_limit: int) -> int:
+        """Cap the per-battery power limit with the active slot's power override (PD mode only)."""
+        slot = self._get_active_slot(coordinator, "charge" if is_charging else "discharge")
+        if not slot or not slot.get("power_override_enabled"):
+            return current_limit
+        if slot.get("mode") == "manual":
+            return current_limit
+        limits = self._slot_battery_limits(slot, coordinator)
+        key = "max_charge_power_w" if is_charging else "max_discharge_power_w"
+        val = limits.get(key)
+        if val is None:
+            return current_limit
+        try:
+            return min(int(current_limit), int(val))
+        except (TypeError, ValueError):
+            return current_limit
+
     def _battery_power_limit(self, coordinator, is_charging: bool) -> int:
         """Return the effective per-battery power limit for the current cycle."""
         if not is_charging:
-            return coordinator.max_discharge_power
+            return self._apply_slot_power_ceiling(
+                coordinator, False, coordinator.max_discharge_power
+            )
 
         limit = coordinator.max_charge_power
         if coordinator.data is None:
-            return limit
+            return self._apply_slot_power_ceiling(coordinator, True, limit)
         if not self._full_charge_voltage_taper_applies(coordinator):
-            return limit
+            return self._apply_slot_power_ceiling(coordinator, True, limit)
 
         max_cell_voltage = coordinator.data.get("max_cell_voltage")
         voltage_tapered = getattr(self, "_normal_balance_voltage_tapered", {})
@@ -912,7 +1024,7 @@ class ChargeDischargeController:
             except (TypeError, ValueError):
                 pass
 
-        return limit
+        return self._apply_slot_power_ceiling(coordinator, True, limit)
 
     def update_pd_parameters(self):
         """Re-read PD controller parameters from config_entry.data (hot-reload)."""
@@ -1209,52 +1321,106 @@ class ChargeDischargeController:
             self.is_discharge_blocked(coordinator) for coordinator in batteries
         )
 
-    def _is_time_slot_allowed(self, is_charging: bool) -> bool:
-        """Return True if the current time-slot configuration allows this direction."""
-        from datetime import datetime, time as dt_time
+    def _slot_battery_key(self, coordinator) -> str | None:
+        """Return 'battery_<N>' for this coordinator's index, or None if unknown."""
+        try:
+            idx = self.coordinators.index(coordinator)
+        except ValueError:
+            return None
+        return f"battery_{idx + 1}"
 
-        all_time_slots = self.config_entry.data.get("no_discharge_time_slots", [])
-        time_slots = [s for s in all_time_slots if s.get("enabled", True)]
+    def _slot_battery_limits(self, slot: dict, coordinator) -> dict:
+        """Return per-battery override values from `slot['battery_limits']` for this coord."""
+        bkey = self._slot_battery_key(coordinator)
+        if bkey is None:
+            return {}
+        return slot.get("battery_limits", {}).get(bkey) or {}
 
-        if not time_slots:
+    def _slot_applies_to_battery(self, slot: dict, coordinator) -> bool:
+        """Return True if `slot.battery_scope` matches this coordinator (or is 'all')."""
+        scope = slot.get("battery_scope", "all")
+        if scope == "all":
+            return True
+        bkey = self._slot_battery_key(coordinator)
+        if bkey is None:
+            return False
+        return scope == bkey
+
+    @staticmethod
+    def _slot_time_matches(slot: dict, now_time) -> bool:
+        """Return True if the current local time falls within the slot's window.
+
+        Supports midnight crossing when start_time > end_time (e.g. 22:00–06:00).
+        """
+        from datetime import time as dt_time
+        try:
+            start = dt_time.fromisoformat(slot["start_time"])
+            end = dt_time.fromisoformat(slot["end_time"])
+        except Exception as e:
+            _LOGGER.error("Error parsing time slot: %s", e)
+            return False
+        if start <= end:
+            return start <= now_time <= end
+        # Midnight crossing: matches if outside the [end, start] gap.
+        return now_time >= start or now_time <= end
+
+    def _is_time_slot_allowed(self, coordinator, is_charging: bool) -> bool:
+        """Per-battery, per-direction whitelist check for time slots.
+
+        Behaviour:
+          - No slots configured → allowed.
+          - No slot for this battery has `allow_<direction>=True` → whitelist
+            inactive for that direction → allowed.
+          - Otherwise: allowed only if the current time matches a slot whose
+            `allow_<direction>=True`, scope applies, and day matches.
+        """
+        from datetime import datetime
+
+        all_slots = self.config_entry.data.get("no_discharge_time_slots", [])
+        slots = [s for s in all_slots if s.get("enabled", True)]
+        if not slots:
+            return True
+
+        field = "allow_charge" if is_charging else "allow_discharge"
+        relevant = [s for s in slots if self._slot_applies_to_battery(s, coordinator)]
+        if not any(s.get(field, False) for s in relevant):
             return True
 
         now = datetime.now()
         current_time = now.time()
         current_day = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][now.weekday()]
 
-        if is_charging:
-            has_charge_restriction = any(slot.get("apply_to_charge", False) for slot in time_slots)
-            if not has_charge_restriction:
-                return True
-
-        for slot in time_slots:
-            if is_charging and not slot.get("apply_to_charge", False):
+        for slot in relevant:
+            if not slot.get(field, False):
                 continue
             if current_day not in slot.get("days", []):
                 continue
-            try:
-                start_time = dt_time.fromisoformat(slot["start_time"])
-                end_time = dt_time.fromisoformat(slot["end_time"])
-            except Exception as e:
-                _LOGGER.error("Error parsing time slot: %s", e)
-                continue
-            if start_time <= current_time <= end_time:
+            if self._slot_time_matches(slot, current_time):
                 return True
-
         return False
 
     def _refresh_time_slot_blocks(self) -> None:
-        """Update charge/discharge blockers from the configured operation slots."""
-        if self._is_time_slot_allowed(True):
-            self.remove_charge_block("time_slot_charge")
-        else:
-            self.set_charge_block("time_slot_charge", "time_slot", {"direction": "charge"})
+        """Update per-battery charge/discharge blockers from the configured slots."""
+        for coordinator in self.coordinators:
+            if self._is_time_slot_allowed(coordinator, True):
+                self.remove_charge_block("time_slot_charge", coordinator=coordinator)
+            else:
+                self.set_charge_block(
+                    "time_slot_charge",
+                    "time_slot",
+                    {"direction": "charge", "battery": coordinator.name},
+                    coordinator=coordinator,
+                )
 
-        if self._is_time_slot_allowed(False):
-            self.remove_discharge_block("time_slot_discharge")
-        else:
-            self.set_discharge_block("time_slot_discharge", "time_slot", {"direction": "discharge"})
+            if self._is_time_slot_allowed(coordinator, False):
+                self.remove_discharge_block("time_slot_discharge", coordinator=coordinator)
+            else:
+                self.set_discharge_block(
+                    "time_slot_discharge",
+                    "time_slot",
+                    {"direction": "discharge", "battery": coordinator.name},
+                    coordinator=coordinator,
+                )
 
     def _refresh_user_battery_blocks(self) -> None:
         """Update per-battery blockers from the software allow switches."""
@@ -1298,7 +1464,30 @@ class ChargeDischargeController:
             if per_battery_target is not None:
                 return min(coordinator.max_soc, per_battery_target), "predictive_target"
 
+        slot = self._get_active_slot(coordinator, "charge")
+        if slot and slot.get("soc_override_enabled"):
+            limits = self._slot_battery_limits(slot, coordinator)
+            slot_max = limits.get("soc_max")
+            if slot_max is not None:
+                try:
+                    return max(12, min(100, int(slot_max))), "slot_soc_override"
+                except (TypeError, ValueError):
+                    pass
+
         return coordinator.max_soc, "max_soc"
+
+    def _effective_discharge_min_soc(self, coordinator) -> tuple[float, str]:
+        """Return the current per-battery discharge floor and the source of that floor."""
+        slot = self._get_active_slot(coordinator, "discharge")
+        if slot and slot.get("soc_override_enabled"):
+            limits = self._slot_battery_limits(slot, coordinator)
+            slot_min = limits.get("soc_min")
+            if slot_min is not None:
+                try:
+                    return max(12, min(100, int(slot_min))), "slot_soc_override"
+                except (TypeError, ValueError):
+                    pass
+        return coordinator.min_soc, "min_soc"
 
     def _refresh_battery_charge_limit_blocks(self) -> None:
         """Expose max-SOC and hysteresis charge availability as per-battery blockers."""
@@ -1421,7 +1610,8 @@ class ChargeDischargeController:
                 continue
 
             current_soc = coordinator.data.get("battery_soc", 0)
-            if current_soc <= coordinator.min_soc:
+            effective_min_soc, min_soc_source = self._effective_discharge_min_soc(coordinator)
+            if current_soc <= effective_min_soc:
                 self.set_discharge_block(
                     "min_soc",
                     "min_soc",
@@ -1429,6 +1619,8 @@ class ChargeDischargeController:
                         "battery": coordinator.name,
                         "soc": current_soc,
                         "min_soc": coordinator.min_soc,
+                        "effective_min_soc": effective_min_soc,
+                        "source": min_soc_source,
                     },
                     coordinator=coordinator,
                 )
@@ -1478,37 +1670,37 @@ class ChargeDischargeController:
         """Return True if the refreshed blocker registry allows this operation."""
         return not (self.is_charge_blocked() if is_charging else self.is_discharge_blocked())
 
-    def _get_active_slot(self) -> dict | None:
-        """Get the currently active time slot, or None if no slot is active.
+    def _get_active_slot(self, coordinator=None, direction: str = "any") -> dict | None:
+        """Return the active slot for a battery/direction, or None.
 
-        Returns the full slot dict so callers can extract target_grid_power,
-        min_charge_power, min_discharge_power, etc.
+        Args:
+            coordinator: per-battery filter. If None, ignore battery_scope.
+            direction: "charge", "discharge", or "any". When "charge"/"discharge",
+                only slots with `allow_<direction>=True` are considered.
         """
-        from datetime import datetime, time as dt_time
+        from datetime import datetime
 
-        time_slots = self.config_entry.data.get("no_discharge_time_slots", [])
-        if not time_slots:
+        slots = self.config_entry.data.get("no_discharge_time_slots", [])
+        if not slots:
             return None
 
         now = datetime.now()
         current_time = now.time()
         current_day = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][now.weekday()]
 
-        for slot in time_slots:
-            # Skip disabled slots
+        for slot in slots:
             if not slot.get("enabled", True):
+                continue
+            if coordinator is not None and not self._slot_applies_to_battery(slot, coordinator):
+                continue
+            if direction == "charge" and not slot.get("allow_charge", False):
+                continue
+            if direction == "discharge" and not slot.get("allow_discharge", False):
                 continue
             if current_day not in slot.get("days", []):
                 continue
-            try:
-                start_time = dt_time.fromisoformat(slot["start_time"])
-                end_time = dt_time.fromisoformat(slot["end_time"])
-            except Exception:
-                continue
-
-            if start_time <= current_time <= end_time:
+            if self._slot_time_matches(slot, current_time):
                 return slot
-
         return None
 
     def _get_available_batteries(self, is_charging: bool, include_operation_blocks: bool = True) -> list:
@@ -1545,6 +1737,10 @@ class ChargeDischargeController:
             # Skip batteries with backup function active (they manage themselves autonomously)
             if self._is_backup_function_active(coordinator):
                 _LOGGER.debug("%s: Skipping - backup function is active", coordinator.name)
+                continue
+
+            if self._is_manual_slot_owned(coordinator):
+                _LOGGER.debug("%s: Skipping - manual time slot owns this battery", coordinator.name)
                 continue
 
             active_balance_enabled = bool(
@@ -3372,6 +3568,14 @@ class ChargeDischargeController:
         if self._is_backup_function_active(coordinator):
             _LOGGER.debug(
                 "[%s] Skipping power write - backup function is active",
+                coordinator.name
+            )
+            return False
+
+        # Skip if a manual time slot already commanded this coord this cycle.
+        if self._is_manual_slot_owned(coordinator):
+            _LOGGER.debug(
+                "[%s] Skipping power write - manual time slot owns this battery",
                 coordinator.name
             )
             return False
@@ -5250,6 +5454,10 @@ class ChargeDischargeController:
         # collection of independent flags and one-off checks.
         self._refresh_operation_blockers()
 
+        # Manual time slots take ownership of their batteries before any other
+        # control logic runs. Owned batteries are skipped by PD/predictive.
+        await self._try_apply_manual_slot()
+
         # Per-battery scheduled active balance mode has priority over global
         # modes. It owns only the selected battery; PD can still use the rest.
         await self._handle_active_balance_mode()
@@ -5813,7 +6021,9 @@ class ChargeDischargeController:
         all_at_min_soc = (len(discharge_available) == 0) and has_reachable
         if all_at_min_soc and not self.grid_charging_active and sensor_actual > 0:
             time_slots = self.config_entry.data.get("no_discharge_time_slots", [])
-            in_discharge_window = (not time_slots) or (self._get_active_slot() is not None)
+            in_discharge_window = (not time_slots) or any(
+                self._get_active_slot(c, "discharge") is not None for c in self.coordinators
+            )
             if in_discharge_window:
                 # sensor_actual is in W; cycle is ~2.5 s → convert to kWh
                 interval_kwh = sensor_actual * 2.5 / 3_600_000
@@ -5979,48 +6189,97 @@ async def _restore_consumption_history(hass: HomeAssistant, entry: ConfigEntry, 
         controller._daily_consumption_history = []
 
 
+def _migrate_time_slots_v2_to_v3(old_slots: list[dict]) -> list[dict]:
+    """Convert legacy slots ({start, end, days, apply_to_charge}) to v3 schema.
+
+    Preserves existing behaviour: apply_to_charge=False slot → discharge whitelist
+    only. apply_to_charge=True slot → both directions whitelisted.
+    """
+    from .const import (
+        DEFAULT_SLOT_MODE,
+        SLOT_BATTERY_SCOPE_ALL,
+    )
+
+    new_slots: list[dict] = []
+    for s in old_slots or []:
+        if not isinstance(s, dict):
+            continue
+        apply_to_charge = bool(s.get("apply_to_charge", False))
+        new_slots.append({
+            "start_time": s.get("start_time", "00:00:00"),
+            "end_time": s.get("end_time", "00:00:00"),
+            "days": s.get("days", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]),
+            "enabled": s.get("enabled", True),
+            "battery_scope": SLOT_BATTERY_SCOPE_ALL,
+            "allow_charge": apply_to_charge,
+            "allow_discharge": True,
+            "soc_override_enabled": False,
+            "power_override_enabled": False,
+            "battery_limits": {},
+            "mode": DEFAULT_SLOT_MODE,
+        })
+    return new_slots
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Migrate old entry versions. v1 -> v2: add port to unique_ids and device identifiers."""
-    if entry.version >= 2:
+    """Migrate old entry versions.
+
+    v1 -> v2: add port to unique_ids and device identifiers.
+    v2 -> v3: expand time slots from {apply_to_charge} to per-direction tick schema.
+    """
+    if entry.version >= 3:
         return True
 
-    from homeassistant.helpers import entity_registry as er
-    from homeassistant.helpers import device_registry as dr
+    new_data = dict(entry.data)
 
-    pairs: list[tuple[str, int]] = []
-    for battery in entry.data.get("batteries", []):
-        host = battery.get(CONF_HOST)
-        port = battery.get(CONF_PORT)
-        if host is not None and port is not None:
-            pairs.append((host, port))
+    if entry.version < 2:
+        from homeassistant.helpers import entity_registry as er
+        from homeassistant.helpers import device_registry as dr
 
-    if not pairs:
-        _LOGGER.error("Cannot migrate to v2: no batteries with host/port in entry.data")
-        return False
+        pairs: list[tuple[str, int]] = []
+        for battery in entry.data.get("batteries", []):
+            host = battery.get(CONF_HOST)
+            port = battery.get(CONF_PORT)
+            if host is not None and port is not None:
+                pairs.append((host, port))
 
-    new_prefixes = {f"{h}_{p}_" for h, p in pairs}
+        if not pairs:
+            _LOGGER.error("Cannot migrate to v2: no batteries with host/port in entry.data")
+            return False
 
-    @callback
-    def _update_unique_id(entity_entry):
-        uid = entity_entry.unique_id
-        if not uid or any(uid.startswith(np) for np in new_prefixes):
+        new_prefixes = {f"{h}_{p}_" for h, p in pairs}
+
+        @callback
+        def _update_unique_id(entity_entry):
+            uid = entity_entry.unique_id
+            if not uid or any(uid.startswith(np) for np in new_prefixes):
+                return None
+            for h, p in pairs:
+                old_prefix = f"{h}_"
+                if uid.startswith(old_prefix):
+                    return {"new_unique_id": f"{h}_{p}_" + uid[len(old_prefix):]}
             return None
+
+        await er.async_migrate_entries(hass, entry.entry_id, _update_unique_id)
+
+        dev_reg = dr.async_get(hass)
         for h, p in pairs:
-            old_prefix = f"{h}_"
-            if uid.startswith(old_prefix):
-                return {"new_unique_id": f"{h}_{p}_" + uid[len(old_prefix):]}
-        return None
+            device = dev_reg.async_get_device(identifiers={(DOMAIN, h)})
+            if device:
+                dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, f"{h}_{p}")})
 
-    await er.async_migrate_entries(hass, entry.entry_id, _update_unique_id)
+        _LOGGER.info("Marstek: migrated config entry to version 2 (unique_ids now include port)")
 
-    dev_reg = dr.async_get(hass)
-    for h, p in pairs:
-        device = dev_reg.async_get_device(identifiers={(DOMAIN, h)})
-        if device:
-            dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, f"{h}_{p}")})
+    if entry.version < 3:
+        old_slots = entry.data.get("no_discharge_time_slots", []) or []
+        new_slots = _migrate_time_slots_v2_to_v3(old_slots)
+        new_data["no_discharge_time_slots"] = new_slots
+        _LOGGER.info(
+            "Marstek: migrated config entry to version 3 (expanded %d time slot(s) to per-direction schema)",
+            len(new_slots),
+        )
 
-    hass.config_entries.async_update_entry(entry, version=2)
-    _LOGGER.info("Marstek: migrated config entry to version 2 (unique_ids now include port)")
+    hass.config_entries.async_update_entry(entry, data=new_data, version=3)
     return True
 
 

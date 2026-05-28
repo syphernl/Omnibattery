@@ -73,20 +73,44 @@
       },
       "add_time_slot": {
         "title": "Plage horaire {slot_num}",
-        "description": "Définissez une plage horaire pendant laquelle les batteries POURRONT se décharger. En dehors de cette plage, elles ne se déchargeront pas.",
+        "description": "Définissez quand et comment les batteries peuvent fonctionner. Les cases contrôlent chaque direction, le SOC et la puissance. Le mode manuel force une puissance exacte en ignorant l'algorithme PD.",
         "data": {
           "start_time": "Heure de début",
           "end_time": "Heure de fin",
           "days": "Jours de la semaine",
-          "apply_to_charge": "Appliquer aussi à la charge",
-          "target_grid_power": "Puissance réseau cible (W)"
+          "battery_scope": "Batterie concernée",
+          "allow_charge": "Autoriser la charge",
+          "allow_discharge": "Autoriser la décharge",
+          "soc_override_enabled": "Contrôler le SOC max/min de la plage",
+          "power_override_enabled": "Contrôler la puissance max de charge/décharge",
+          "mode": "Mode de fonctionnement"
         },
         "data_description": {
-          "start_time": "Heure de début de la plage (format 24h)",
-          "end_time": "Heure de fin de la plage (format 24h)",
-          "days": "Jours où cette plage s'applique",
-          "apply_to_charge": "Si coché, la plage limitera également la charge (la batterie ne se chargera que pendant cette plage)",
-          "target_grid_power": "Puissance réseau vers laquelle le contrôleur régule pendant cette plage. 0W = flux réseau nul (par défaut). Négatif = légère exportation (ex : -150W). Positif = légère importation autorisée."
+          "start_time": "Heure de début (24h). Le passage à minuit est pris en charge.",
+          "end_time": "Heure de fin (24h).",
+          "days": "Jours où cette plage s'applique.",
+          "battery_scope": "Sélectionnez 'all' pour toutes les batteries ou une batterie spécifique.",
+          "allow_charge": "Si coché, la charge est autorisée pendant la plage. Si AUCUNE plage n'autorise la charge, elle est libre par défaut.",
+          "allow_discharge": "Si coché, la décharge est autorisée pendant la plage. Si AUCUNE plage n'autorise la décharge, elle est libre par défaut.",
+          "soc_override_enabled": "Si coché, la plage remplace le SOC max/min de la batterie dans la fenêtre.",
+          "power_override_enabled": "Si coché, la plage limite ou force la puissance maximale.",
+          "mode": "PD : l'algorithme prédictif ajuste la puissance avec le plafond de la plage. Manuel : décharge ou charge forcée à la puissance indiquée."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Détails de la plage {slot_num}",
+        "description": "Ajustez les limites de SOC et/ou de puissance configurées pour la plage.",
+        "data": {
+          "soc_min": "SOC minimum (%)",
+          "soc_max": "SOC maximum (%)",
+          "max_charge_power_w": "Puissance max de charge (W)",
+          "max_discharge_power_w": "Puissance max de décharge (W)"
+        },
+        "data_description": {
+          "soc_min": "La batterie ne se déchargera pas sous ce SOC pendant la plage (plancher 12%).",
+          "soc_max": "La batterie ne se chargera pas au-dessus de ce SOC pendant la plage (plafond 100%).",
+          "max_charge_power_w": "En mode PD c'est le plafond dynamique. En mode manuel c'est la puissance de charge exacte.",
+          "max_discharge_power_w": "En mode PD c'est le plafond dynamique. En mode manuel c'est la puissance de décharge exacte."
         }
       },
       "add_more_slots": {
@@ -331,8 +355,10 @@
       "cannot_connect": "Impossible de se connecter à la batterie. Vérifiez l'adresse IP et que la batterie est accessible sur le réseau.",
       "sensor_not_found": "Le capteur de prévision solaire n'existe pas. Vérifiez que le capteur est disponible.",
       "invalid_unit": "Le capteur de prévision solaire doit avoir 'kWh' ou 'Wh' comme unité.",
-      "overlapping_slots": "Ce créneau horaire chevauche un créneau existant. Ajustez les horaires ou les jours.",
+      "overlapping_slots": "Ce créneau chevauche un autre créneau pour la même batterie. Ajustez les horaires, jours ou batterie cible.",
       "midnight_crossing": "L'heure de début doit être antérieure à l'heure de fin. Pour les périodes nocturnes, créez deux créneaux séparés (ex: 22:00-23:59 et 00:00-06:00).",
+      "slot_does_nothing": "Le créneau doit autoriser au moins une direction (charge ou décharge).",
+      "manual_requires_power": "Le mode manuel nécessite l'activation du contrôle de puissance.",
       "no_price_data": "Le capteur sélectionné ne possède pas les attributs de prix attendus. Nordpool : nécessite `raw_today`. PVPC : nécessite `price_00h` … `price_23h`. CKW : nécessite l'attribut `prices` avec une liste de créneaux. EPEX : nécessite l'attribut `data` avec une liste de créneaux. ENTSO-e : nécessite l'attribut `prices_today` avec une liste de créneaux."
     },
     "abort": {
@@ -429,20 +455,44 @@
       },
       "add_time_slot": {
         "title": "Plage horaire {slot_num}",
-        "description": "Définissez ou modifiez une plage horaire pendant laquelle les batteries POURRONT se décharger.",
+        "description": "Définissez quand et comment les batteries peuvent fonctionner. Les cases contrôlent chaque direction, le SOC et la puissance. Le mode manuel force une puissance exacte en ignorant l'algorithme PD.",
         "data": {
           "start_time": "Heure de début",
           "end_time": "Heure de fin",
           "days": "Jours de la semaine",
-          "apply_to_charge": "Appliquer aussi à la charge",
-          "target_grid_power": "Puissance réseau cible (W)"
+          "battery_scope": "Batterie concernée",
+          "allow_charge": "Autoriser la charge",
+          "allow_discharge": "Autoriser la décharge",
+          "soc_override_enabled": "Contrôler le SOC max/min de la plage",
+          "power_override_enabled": "Contrôler la puissance max de charge/décharge",
+          "mode": "Mode de fonctionnement"
         },
         "data_description": {
-          "start_time": "Heure de début de la plage (format 24h)",
-          "end_time": "Heure de fin de la plage (format 24h)",
-          "days": "Jours où cette plage s'applique",
-          "apply_to_charge": "Si coché, la plage limitera également la charge (la batterie ne se chargera que pendant cette plage)",
-          "target_grid_power": "Puissance réseau vers laquelle le contrôleur régule pendant cette plage. 0W = flux réseau nul (par défaut). Négatif = légère exportation (ex : -150W). Positif = légère importation autorisée."
+          "start_time": "Heure de début (24h). Le passage à minuit est pris en charge.",
+          "end_time": "Heure de fin (24h).",
+          "days": "Jours où cette plage s'applique.",
+          "battery_scope": "Sélectionnez 'all' pour toutes les batteries ou une batterie spécifique.",
+          "allow_charge": "Si coché, la charge est autorisée pendant la plage. Si AUCUNE plage n'autorise la charge, elle est libre par défaut.",
+          "allow_discharge": "Si coché, la décharge est autorisée pendant la plage. Si AUCUNE plage n'autorise la décharge, elle est libre par défaut.",
+          "soc_override_enabled": "Si coché, la plage remplace le SOC max/min de la batterie dans la fenêtre.",
+          "power_override_enabled": "Si coché, la plage limite ou force la puissance maximale.",
+          "mode": "PD : l'algorithme prédictif ajuste la puissance avec le plafond de la plage. Manuel : décharge ou charge forcée à la puissance indiquée."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Détails de la plage {slot_num}",
+        "description": "Ajustez les limites de SOC et/ou de puissance configurées pour la plage.",
+        "data": {
+          "soc_min": "SOC minimum (%)",
+          "soc_max": "SOC maximum (%)",
+          "max_charge_power_w": "Puissance max de charge (W)",
+          "max_discharge_power_w": "Puissance max de décharge (W)"
+        },
+        "data_description": {
+          "soc_min": "La batterie ne se déchargera pas sous ce SOC pendant la plage (plancher 12%).",
+          "soc_max": "La batterie ne se chargera pas au-dessus de ce SOC pendant la plage (plafond 100%).",
+          "max_charge_power_w": "En mode PD c'est le plafond dynamique. En mode manuel c'est la puissance de charge exacte.",
+          "max_discharge_power_w": "En mode PD c'est le plafond dynamique. En mode manuel c'est la puissance de décharge exacte."
         }
       },
       "add_more_slots": {
@@ -687,8 +737,10 @@
       "cannot_connect": "Impossible de se connecter à la batterie. Vérifiez l'adresse IP et que la batterie est accessible sur le réseau.",
       "sensor_not_found": "Le capteur de prévision solaire n'existe pas. Vérifiez que le capteur est disponible.",
       "invalid_unit": "Le capteur de prévision solaire doit avoir 'kWh' ou 'Wh' comme unité.",
-      "overlapping_slots": "Ce créneau horaire chevauche un créneau existant. Ajustez les horaires ou les jours.",
+      "overlapping_slots": "Ce créneau chevauche un autre créneau pour la même batterie. Ajustez les horaires, jours ou batterie cible.",
       "midnight_crossing": "L'heure de début doit être antérieure à l'heure de fin. Pour les périodes nocturnes, créez deux créneaux séparés (ex: 22:00-23:59 et 00:00-06:00).",
+      "slot_does_nothing": "Le créneau doit autoriser au moins une direction (charge ou décharge).",
+      "manual_requires_power": "Le mode manuel nécessite l'activation du contrôle de puissance.",
       "no_price_data": "Le capteur sélectionné ne possède pas les attributs de prix attendus. Nordpool : nécessite `raw_today`. PVPC : nécessite `price_00h` … `price_23h`. CKW : nécessite l'attribut `prices` avec une liste de créneaux. EPEX : nécessite l'attribut `data` avec une liste de créneaux. ENTSO-e : nécessite l'attribut `prices_today` avec une liste de créneaux."
     }
   },
@@ -702,6 +754,17 @@
         "fri": "Vendredi",
         "sat": "Samedi",
         "sun": "Dimanche"
+      }
+    },
+    "slot_mode": {
+      "options": {
+        "pd": "PD (algorithme prédictif)",
+        "manual": "Manuel (puissance forcée)"
+      }
+    },
+    "slot_battery_scope": {
+      "options": {
+        "all": "Toutes les batteries"
       }
     },
     "predictive_charging_mode": {

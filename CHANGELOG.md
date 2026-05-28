@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.0.0] - 2026-05-27
+
+### ⚠️ Breaking Change — Config entry version bumped to 3 (automatic migration)
+Time slots ([`no_discharge_time_slots`](custom_components/marstek_venus_energy_manager/const.py)) gained a richer per-direction schema. `async_migrate_entry` converts every existing slot on first start, preserving the legacy whitelist behavior — no manual action required. Legacy `apply_to_charge=False` slots map to `allow_discharge=True, allow_charge=False`; `apply_to_charge=True` slots map to both directions enabled. Scope defaults to `all`, mode to `pd`, no SOC/power overrides.
+
+### Added
+- **Per-battery, per-direction time slots**: Each slot now exposes independent `allow_charge` and `allow_discharge` ticks instead of a single `apply_to_charge`. The charge and discharge whitelists are evaluated independently: a direction is restricted to its allowing slots only when at least one slot opts in for that direction; otherwise the direction stays unrestricted by default.
+- **Slot SOC override**: A new tick lets a slot replace the battery's max/min SOC inside its window (clamped to `[12, 100]`). Reported as `slot_soc_override` source in the `max_soc` / `min_soc` blockers.
+- **Slot power override**: A new tick caps the per-battery `max_charge_power` / `max_discharge_power` for the slot, narrowing the PD dynamic envelope without touching the global limits.
+- **Manual-power slot mode**: A new `mode = manual` option forces a battery to a fixed charge or discharge power for the slot, bypassing the PD algorithm. Requires the power tick on and exactly one of `allow_charge` / `allow_discharge` enabled. Safety blockers (min/max SOC, EV pause, active balance) still stop the manual write.
+- **Per-battery slot scope**: A new `battery_scope` selector targets a slot at `all` batteries or one specific `battery_N`. Overlap validation only fires when both slots target the same physical battery.
+- **Midnight crossing supported natively**: Slot evaluation now handles `start_time > end_time` ranges (e.g. 22:00–06:00) without needing two separate slots. The config flow still validates that start < end in the form; cross-midnight slots can be created via two slots or by editing the stored value.
+- **Slot diagnostic attributes**: `binary_sensor.predictive_charging_active` exposes `active_slot_per_battery` (currently active slot per battery, including mode and overrides) and `manual_slot_owned` (batteries claimed by a manual slot this cycle).
+
+### Changed
+- **Time slot blockers are per-battery**: `_refresh_time_slot_blocks` now sets `time_slot_charge` / `time_slot_discharge` blockers per coordinator instead of globally, so a slot targeting one battery no longer affects the rest of the system.
+- **Time slot limit raised from 4 to 8**: The config flow and options flow now allow up to 8 slots to accommodate the richer scoping and multi-battery setups.
+- **Config flow split into two slot steps**: Step A captures times, days, scope, ticks and mode. Step B is shown only when SOC or power overrides are enabled, asking for the corresponding values. Reduces UI noise for users that don't need overrides.
+- **Documentation updated**: [`site-docs/configuration/time-slots.md`](site-docs/configuration/time-slots.md) and [`site-docs/configuration/time-slots.es.md`](site-docs/configuration/time-slots.es.md) describe the new model, scope, modes, migration mapping, and diagnostic attributes.
+
+### Fixed
+- **PD control starved by polling on slow batteries (v3)**: The Modbus poll loop acquired and released the coordinator lock for each register but never yielded the event loop between iterations. On v3 batteries where a full poll cycle takes ~3 s, the PD control writer waiting on the lock was repeatedly bypassed as the tight `for` loop re-acquired the lock before asyncio could schedule the writer. Added `await asyncio.sleep(0)` after each register read so the event loop gets a tick to hand the lock to the PD control coroutine between reads.
+
+### Notes
+- Translations updated in `strings.json` plus `en`, `es`, `fr`, `de`, `nl` locale files (new field labels, new error keys `slot_does_nothing` and `manual_requires_power`, new `slot_mode` and `slot_battery_scope` selectors).
+- SOC override is enforced by software (no hardware register sync on v3/vA/vD; v2 cutoff registers `44000`/`44001` are not re-written per slot). Expect 1–3 control cycles of latency (~3–9 s) before charge or discharge stops at the slot's SOC limit.
+- Slots that target a `battery_N` no longer present (e.g. battery count reduced after configuration) become inert. Remove or edit them via the options flow.
+
 ## [1.8.4] - 2026-05-27
 
 ### Changed

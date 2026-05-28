@@ -73,20 +73,44 @@
       },
       "add_time_slot": {
         "title": "Tijdslot {slot_num}",
-        "description": "Definieer een tijdslot waarin batterijen WEL mogen ontladen. Buiten dit tijdslot wordt niet ontladen.",
+        "description": "Definieer wanneer en hoe de batterijen mogen werken. De vinkjes regelen elke richting, SOC en vermogen. Handmatige modus forceert een exact vermogen en omzeilt het PD-algoritme.",
         "data": {
           "start_time": "Starttijd",
           "end_time": "Eindtijd",
           "days": "Dagen van de week",
-          "apply_to_charge": "Ook toepassen op laden",
-          "target_grid_power": "Doelvermogen netwerk (W)"
+          "battery_scope": "Betrokken batterij",
+          "allow_charge": "Laden toestaan",
+          "allow_discharge": "Ontladen toestaan",
+          "soc_override_enabled": "SOC max/min van slot beheren",
+          "power_override_enabled": "Max. laad-/ontlaadvermogen beheren",
+          "mode": "Bedrijfsmodus"
         },
         "data_description": {
-          "start_time": "Starttijd van het tijdslot (24u-formaat)",
-          "end_time": "Eindtijd van het tijdslot (24u-formaat)",
-          "days": "Dagen waarop dit tijdslot van toepassing is",
-          "apply_to_charge": "Indien aangevinkt, beperkt het tijdslot ook het laden (batterij laadt alleen tijdens dit tijdslot)",
-          "target_grid_power": "Netwerkvermogen waarop de regelaar reguleert tijdens dit tijdslot. 0W = geen netstroom (standaard). Negatief = lichte export (bijv. -150W). Positief = lichte import toegestaan."
+          "start_time": "Starttijd (24u). Middernachtovergang wordt ondersteund.",
+          "end_time": "Eindtijd (24u).",
+          "days": "Dagen waarop dit tijdslot geldt.",
+          "battery_scope": "Selecteer 'all' voor alle batterijen of een specifieke batterij.",
+          "allow_charge": "Indien aangevinkt is laden toegestaan binnen het slot. Als GEEN slot laden toestaat, is laden standaard vrij.",
+          "allow_discharge": "Indien aangevinkt is ontladen toegestaan binnen het slot. Als GEEN slot ontladen toestaat, is ontladen standaard vrij.",
+          "soc_override_enabled": "Indien aangevinkt overschrijft het slot de SOC max/min van de batterij binnen het venster.",
+          "power_override_enabled": "Indien aangevinkt beperkt of forceert het slot het maximale vermogen.",
+          "mode": "PD: het predictieve algoritme regelt het vermogen met de sloplafond. Handmatig: geforceerd ontladen of laden op het opgegeven vermogen."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Details van slot {slot_num}",
+        "description": "Stel de SOC- en/of vermogenslimieten van het slot in.",
+        "data": {
+          "soc_min": "Min. SOC (%)",
+          "soc_max": "Max. SOC (%)",
+          "max_charge_power_w": "Max. laadvermogen (W)",
+          "max_discharge_power_w": "Max. ontlaadvermogen (W)"
+        },
+        "data_description": {
+          "soc_min": "Batterij ontlaadt niet onder deze SOC tijdens het slot (ondergrens 12%).",
+          "soc_max": "Batterij laadt niet boven deze SOC tijdens het slot (bovengrens 100%).",
+          "max_charge_power_w": "In PD-modus dynamisch plafond. In handmatige modus het exacte laadvermogen.",
+          "max_discharge_power_w": "In PD-modus dynamisch plafond. In handmatige modus het exacte ontlaadvermogen."
         }
       },
       "add_more_slots": {
@@ -331,8 +355,10 @@
       "cannot_connect": "Kan geen verbinding maken met de batterij. Controleer het IP-adres en of de batterij toegankelijk is op het netwerk.",
       "sensor_not_found": "Zonnevoorspellingssensor bestaat niet. Controleer of de sensor beschikbaar is.",
       "invalid_unit": "Zonnevoorspellingssensor moet 'kWh' of 'Wh' als eenheid hebben.",
-      "overlapping_slots": "Dit tijdslot overlapt met een bestaand tijdslot. Pas de tijden of dagen aan.",
+      "overlapping_slots": "Dit tijdslot overlapt met een bestaand slot voor dezelfde batterij. Pas tijden, dagen of de batterij aan.",
       "midnight_crossing": "De starttijd moet vóór de eindtijd liggen. Maak voor nachtperiodes twee aparte tijdslots aan (bijv. 22:00-23:59 en 00:00-06:00).",
+      "slot_does_nothing": "Het slot moet ten minste één richting toestaan (laden of ontladen).",
+      "manual_requires_power": "Handmatige modus vereist dat vermogenscontrole is ingeschakeld.",
       "no_price_data": "De geselecteerde sensor heeft niet de verwachte prijsattributen. Nordpool: heeft `raw_today` nodig. PVPC: heeft `price_00h` … `price_23h` nodig. CKW: heeft het attribuut `prices` met een lijst van slots nodig. EPEX: heeft het attribuut `data` met een lijst van slots nodig. ENTSO-e: heeft het attribuut `prices_today` met een lijst van slots nodig."
     },
     "abort": {
@@ -429,20 +455,44 @@
       },
       "add_time_slot": {
         "title": "Tijdslot {slot_num}",
-        "description": "Definieer of wijzig een tijdslot waarin batterijen WEL mogen ontladen.",
+        "description": "Definieer wanneer en hoe de batterijen mogen werken. De vinkjes regelen elke richting, SOC en vermogen. Handmatige modus forceert een exact vermogen en omzeilt het PD-algoritme.",
         "data": {
           "start_time": "Starttijd",
           "end_time": "Eindtijd",
           "days": "Dagen van de week",
-          "apply_to_charge": "Ook toepassen op laden",
-          "target_grid_power": "Doelvermogen netwerk (W)"
+          "battery_scope": "Betrokken batterij",
+          "allow_charge": "Laden toestaan",
+          "allow_discharge": "Ontladen toestaan",
+          "soc_override_enabled": "SOC max/min van slot beheren",
+          "power_override_enabled": "Max. laad-/ontlaadvermogen beheren",
+          "mode": "Bedrijfsmodus"
         },
         "data_description": {
-          "start_time": "Starttijd van het tijdslot (24u-formaat)",
-          "end_time": "Eindtijd van het tijdslot (24u-formaat)",
-          "days": "Dagen waarop dit tijdslot van toepassing is",
-          "apply_to_charge": "Indien aangevinkt, beperkt het tijdslot ook het laden (batterij laadt alleen tijdens dit tijdslot)",
-          "target_grid_power": "Netwerkvermogen waarop de regelaar reguleert tijdens dit tijdslot. 0W = geen netstroom (standaard). Negatief = lichte export (bijv. -150W). Positief = lichte import toegestaan."
+          "start_time": "Starttijd (24u). Middernachtovergang wordt ondersteund.",
+          "end_time": "Eindtijd (24u).",
+          "days": "Dagen waarop dit tijdslot geldt.",
+          "battery_scope": "Selecteer 'all' voor alle batterijen of een specifieke batterij.",
+          "allow_charge": "Indien aangevinkt is laden toegestaan binnen het slot. Als GEEN slot laden toestaat, is laden standaard vrij.",
+          "allow_discharge": "Indien aangevinkt is ontladen toegestaan binnen het slot. Als GEEN slot ontladen toestaat, is ontladen standaard vrij.",
+          "soc_override_enabled": "Indien aangevinkt overschrijft het slot de SOC max/min van de batterij binnen het venster.",
+          "power_override_enabled": "Indien aangevinkt beperkt of forceert het slot het maximale vermogen.",
+          "mode": "PD: het predictieve algoritme regelt het vermogen met de sloplafond. Handmatig: geforceerd ontladen of laden op het opgegeven vermogen."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Details van slot {slot_num}",
+        "description": "Stel de SOC- en/of vermogenslimieten van het slot in.",
+        "data": {
+          "soc_min": "Min. SOC (%)",
+          "soc_max": "Max. SOC (%)",
+          "max_charge_power_w": "Max. laadvermogen (W)",
+          "max_discharge_power_w": "Max. ontlaadvermogen (W)"
+        },
+        "data_description": {
+          "soc_min": "Batterij ontlaadt niet onder deze SOC tijdens het slot (ondergrens 12%).",
+          "soc_max": "Batterij laadt niet boven deze SOC tijdens het slot (bovengrens 100%).",
+          "max_charge_power_w": "In PD-modus dynamisch plafond. In handmatige modus het exacte laadvermogen.",
+          "max_discharge_power_w": "In PD-modus dynamisch plafond. In handmatige modus het exacte ontlaadvermogen."
         }
       },
       "add_more_slots": {
@@ -687,8 +737,10 @@
       "cannot_connect": "Kan geen verbinding maken met de batterij. Controleer het IP-adres en of de batterij toegankelijk is op het netwerk.",
       "sensor_not_found": "Zonnevoorspellingssensor bestaat niet. Controleer of de sensor beschikbaar is.",
       "invalid_unit": "Zonnevoorspellingssensor moet 'kWh' of 'Wh' als eenheid hebben.",
-      "overlapping_slots": "Dit tijdslot overlapt met een bestaand tijdslot. Pas de tijden of dagen aan.",
+      "overlapping_slots": "Dit tijdslot overlapt met een bestaand slot voor dezelfde batterij. Pas tijden, dagen of de batterij aan.",
       "midnight_crossing": "De starttijd moet vóór de eindtijd liggen. Maak voor nachtperiodes twee aparte tijdslots aan (bijv. 22:00-23:59 en 00:00-06:00).",
+      "slot_does_nothing": "Het slot moet ten minste één richting toestaan (laden of ontladen).",
+      "manual_requires_power": "Handmatige modus vereist dat vermogenscontrole is ingeschakeld.",
       "no_price_data": "De geselecteerde sensor heeft niet de verwachte prijsattributen. Nordpool: heeft `raw_today` nodig. PVPC: heeft `price_00h` … `price_23h` nodig. CKW: heeft het attribuut `prices` met een lijst van slots nodig. EPEX: heeft het attribuut `data` met een lijst van slots nodig. ENTSO-e: heeft het attribuut `prices_today` met een lijst van slots nodig."
     }
   },
@@ -702,6 +754,17 @@
         "fri": "Vrijdag",
         "sat": "Zaterdag",
         "sun": "Zondag"
+      }
+    },
+    "slot_mode": {
+      "options": {
+        "pd": "PD (predictief algoritme)",
+        "manual": "Handmatig (geforceerd vermogen)"
+      }
+    },
+    "slot_battery_scope": {
+      "options": {
+        "all": "Alle batterijen"
       }
     },
     "predictive_charging_mode": {

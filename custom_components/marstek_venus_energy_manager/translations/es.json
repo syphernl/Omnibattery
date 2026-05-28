@@ -73,20 +73,44 @@
       },
       "add_time_slot": {
         "title": "Franja horaria {slot_num}",
-        "description": "Define una franja horaria en la que las baterías PODRÁN descargar. Fuera de esta franja, no descargarán.",
+        "description": "Define cuándo y cómo se permite operar a las baterías. Los ticks permiten controlar cada dirección, el SOC y la potencia. El modo manual fuerza una potencia exacta ignorando el algoritmo PD.",
         "data": {
           "start_time": "Hora de inicio",
           "end_time": "Hora de fin",
           "days": "Días de la semana",
-          "apply_to_charge": "Aplicar también a la carga",
-          "target_grid_power": "Potencia objetivo de red (W)"
+          "battery_scope": "Batería afectada",
+          "allow_charge": "Permitir carga",
+          "allow_discharge": "Permitir descarga",
+          "soc_override_enabled": "Controlar SOC máx/mín de la franja",
+          "power_override_enabled": "Controlar potencia máx de carga/descarga",
+          "mode": "Modo de operación"
         },
         "data_description": {
-          "start_time": "Hora de inicio de la franja (formato 24h)",
-          "end_time": "Hora de fin de la franja (formato 24h)",
-          "days": "Días en los que se aplica esta franja",
-          "apply_to_charge": "Si se marca, la franja también limitará la carga (solo cargará durante la franja)",
-          "target_grid_power": "Potencia de red a la que el controlador regula durante esta franja. 0W = flujo cero (predeterminado). Negativo = ligera exportación (ej: -150W). Positivo = permitir ligera importación."
+          "start_time": "Hora de inicio (24h). Se admite cruce de medianoche.",
+          "end_time": "Hora de fin (24h).",
+          "days": "Días en los que se aplica esta franja.",
+          "battery_scope": "Selecciona 'all' para aplicar a todas las baterías o una concreta.",
+          "allow_charge": "Si está marcado, la batería podrá cargar dentro de la franja. Si NINGUNA franja permite carga, la carga es libre por defecto.",
+          "allow_discharge": "Si está marcado, la batería podrá descargar dentro de la franja. Si NINGUNA franja permite descarga, la descarga es libre por defecto.",
+          "soc_override_enabled": "Si está marcado, la franja sobrescribe el SOC máx/mín de la batería dentro de la ventana.",
+          "power_override_enabled": "Si está marcado, la franja limita o fuerza la potencia máxima.",
+          "mode": "PD: el algoritmo predictivo ajusta la potencia con el techo del slot. Manual: descarga o carga forzada a la potencia indicada."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Detalles de la franja {slot_num}",
+        "description": "Ajusta los límites de SOC y/o potencia configurados en la franja.",
+        "data": {
+          "soc_min": "SOC mínimo (%)",
+          "soc_max": "SOC máximo (%)",
+          "max_charge_power_w": "Potencia máxima de carga (W)",
+          "max_discharge_power_w": "Potencia máxima de descarga (W)"
+        },
+        "data_description": {
+          "soc_min": "La batería no descargará por debajo de este SOC durante la franja (mínimo 12%).",
+          "soc_max": "La batería no cargará por encima de este SOC durante la franja (máximo 100%).",
+          "max_charge_power_w": "En modo PD es el techo dinámico. En modo manual es la potencia exacta de carga.",
+          "max_discharge_power_w": "En modo PD es el techo dinámico. En modo manual es la potencia exacta de descarga."
         }
       },
       "add_more_slots": {
@@ -331,8 +355,10 @@
       "cannot_connect": "No se puede conectar a la batería. Verifica la dirección IP y que la batería esté accesible en la red.",
       "sensor_not_found": "El sensor de predicción solar no existe. Verifica que el sensor esté disponible.",
       "invalid_unit": "El sensor de predicción solar debe tener como unidad 'kWh' o 'Wh'.",
-      "overlapping_slots": "Esta franja se solapa con una existente. Ajuste los horarios o los días.",
+      "overlapping_slots": "Esta franja se solapa con otra ya configurada para la misma batería. Ajusta horarios, días o batería.",
       "midnight_crossing": "La hora de inicio debe ser anterior a la hora de fin. Para períodos nocturnos, cree dos franjas separadas (ej: 22:00-23:59 y 00:00-06:00).",
+      "slot_does_nothing": "La franja debe permitir al menos una dirección (carga o descarga).",
+      "manual_requires_power": "El modo manual requiere activar el control de potencia.",
       "no_price_data": "El sensor seleccionado no tiene los atributos de precio esperados. Nordpool: necesita `raw_today`. PVPC: necesita `price_00h` … `price_23h`. CKW: necesita el atributo `prices` con una lista de franjas. EPEX: necesita el atributo `data` con una lista de franjas. ENTSO-e: necesita el atributo `prices_today` con una lista de franjas."
     },
     "abort": {
@@ -429,20 +455,44 @@
       },
       "add_time_slot": {
         "title": "Franja horaria {slot_num}",
-        "description": "Define o modifica una franja horaria en la que las baterías PODRÁN descargar.",
+        "description": "Define cuándo y cómo se permite operar a las baterías. Los ticks permiten controlar cada dirección, el SOC y la potencia. El modo manual fuerza una potencia exacta ignorando el algoritmo PD.",
         "data": {
           "start_time": "Hora de inicio",
           "end_time": "Hora de fin",
           "days": "Días de la semana",
-          "apply_to_charge": "Aplicar también a la carga",
-          "target_grid_power": "Potencia objetivo de red (W)"
+          "battery_scope": "Batería afectada",
+          "allow_charge": "Permitir carga",
+          "allow_discharge": "Permitir descarga",
+          "soc_override_enabled": "Controlar SOC máx/mín de la franja",
+          "power_override_enabled": "Controlar potencia máx de carga/descarga",
+          "mode": "Modo de operación"
         },
         "data_description": {
-          "start_time": "Hora de inicio de la franja (formato 24h)",
-          "end_time": "Hora de fin de la franja (formato 24h)",
-          "days": "Días en los que se aplica esta franja",
-          "apply_to_charge": "Si se marca, la franja también limitará la carga (solo cargará durante la franja)",
-          "target_grid_power": "Potencia de red a la que el controlador regula durante esta franja. 0W = flujo cero (predeterminado). Negativo = ligera exportación (ej: -150W). Positivo = permitir ligera importación."
+          "start_time": "Hora de inicio (24h). Se admite cruce de medianoche.",
+          "end_time": "Hora de fin (24h).",
+          "days": "Días en los que se aplica esta franja.",
+          "battery_scope": "Selecciona 'all' para aplicar a todas las baterías o una concreta.",
+          "allow_charge": "Si está marcado, la batería podrá cargar dentro de la franja. Si NINGUNA franja permite carga, la carga es libre por defecto.",
+          "allow_discharge": "Si está marcado, la batería podrá descargar dentro de la franja. Si NINGUNA franja permite descarga, la descarga es libre por defecto.",
+          "soc_override_enabled": "Si está marcado, la franja sobrescribe el SOC máx/mín de la batería dentro de la ventana.",
+          "power_override_enabled": "Si está marcado, la franja limita o fuerza la potencia máxima.",
+          "mode": "PD: el algoritmo predictivo ajusta la potencia con el techo del slot. Manual: descarga o carga forzada a la potencia indicada."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Detalles de la franja {slot_num}",
+        "description": "Ajusta los límites de SOC y/o potencia configurados en la franja.",
+        "data": {
+          "soc_min": "SOC mínimo (%)",
+          "soc_max": "SOC máximo (%)",
+          "max_charge_power_w": "Potencia máxima de carga (W)",
+          "max_discharge_power_w": "Potencia máxima de descarga (W)"
+        },
+        "data_description": {
+          "soc_min": "La batería no descargará por debajo de este SOC durante la franja (mínimo 12%).",
+          "soc_max": "La batería no cargará por encima de este SOC durante la franja (máximo 100%).",
+          "max_charge_power_w": "En modo PD es el techo dinámico. En modo manual es la potencia exacta de carga.",
+          "max_discharge_power_w": "En modo PD es el techo dinámico. En modo manual es la potencia exacta de descarga."
         }
       },
       "add_more_slots": {
@@ -687,8 +737,10 @@
       "cannot_connect": "No se puede conectar a la batería. Verifica la dirección IP y que la batería esté accesible en la red.",
       "sensor_not_found": "El sensor de predicción solar no existe. Verifica que el sensor esté disponible.",
       "invalid_unit": "El sensor de predicción solar debe tener como unidad 'kWh' o 'Wh'.",
-      "overlapping_slots": "Esta franja se solapa con una existente. Ajuste los horarios o los días.",
+      "overlapping_slots": "Esta franja se solapa con otra ya configurada para la misma batería. Ajusta horarios, días o batería.",
       "midnight_crossing": "La hora de inicio debe ser anterior a la hora de fin. Para períodos nocturnos, cree dos franjas separadas (ej: 22:00-23:59 y 00:00-06:00).",
+      "slot_does_nothing": "La franja debe permitir al menos una dirección (carga o descarga).",
+      "manual_requires_power": "El modo manual requiere activar el control de potencia.",
       "no_price_data": "El sensor seleccionado no tiene los atributos de precio esperados. Nordpool: necesita `raw_today`. PVPC: necesita `price_00h` … `price_23h`. CKW: necesita el atributo `prices` con una lista de franjas. EPEX: necesita el atributo `data` con una lista de franjas. ENTSO-e: necesita el atributo `prices_today` con una lista de franjas."
     }
   },
@@ -702,6 +754,17 @@
         "fri": "Viernes",
         "sat": "Sábado",
         "sun": "Domingo"
+      }
+    },
+    "slot_mode": {
+      "options": {
+        "pd": "PD (algoritmo predictivo)",
+        "manual": "Manual (potencia forzada)"
+      }
+    },
+    "slot_battery_scope": {
+      "options": {
+        "all": "Todas las baterías"
       }
     },
     "predictive_charging_mode": {

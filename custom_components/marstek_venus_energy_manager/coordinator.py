@@ -458,6 +458,12 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
                         sensor_key=key,
                     )
 
+                # Yield to the event loop so the PD control writer waiting on
+                # self.lock can acquire it before this loop re-enters async with.
+                # Without this yield, asyncio never gets a tick to hand the lock
+                # to the waiter — the tight for-loop starves write_power_atomic.
+                await asyncio.sleep(0)
+
                 if value is not None:
                     sensors_succeeded += 1
                     # Apply scaling and rounding (not applicable to char/string sensors)

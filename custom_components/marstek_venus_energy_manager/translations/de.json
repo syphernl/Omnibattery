@@ -73,20 +73,44 @@
       },
       "add_time_slot": {
         "title": "Zeitfenster {slot_num}",
-        "description": "Definieren Sie ein Zeitfenster, in dem Batterien entladen werden DÜRFEN. Außerhalb dieses Zeitfensters wird nicht entladen.",
+        "description": "Legen Sie fest, wann und wie die Batterien arbeiten dürfen. Die Häkchen steuern jede Richtung, SOC und Leistung. Manueller Modus erzwingt eine exakte Leistung und umgeht den PD-Algorithmus.",
         "data": {
           "start_time": "Startzeit",
           "end_time": "Endzeit",
           "days": "Wochentage",
-          "apply_to_charge": "Auch auf Laden anwenden",
-          "target_grid_power": "Ziel-Netzleistung (W)"
+          "battery_scope": "Betroffene Batterie",
+          "allow_charge": "Laden erlauben",
+          "allow_discharge": "Entladen erlauben",
+          "soc_override_enabled": "SOC max/min des Fensters steuern",
+          "power_override_enabled": "Max. Lade-/Entladeleistung steuern",
+          "mode": "Betriebsmodus"
         },
         "data_description": {
-          "start_time": "Startzeit des Zeitfensters (24h-Format)",
-          "end_time": "Endzeit des Zeitfensters (24h-Format)",
-          "days": "Tage, an denen dieses Zeitfenster gilt",
-          "apply_to_charge": "Wenn aktiviert, schränkt das Zeitfenster auch das Laden ein (Batterie lädt nur während dieses Zeitfensters)",
-          "target_grid_power": "Netzleistung, auf die der Regler während dieses Zeitfensters reguliert. 0W = kein Netzfluss (Standard). Negativ = leichter Export (z.B. -150W). Positiv = leichter Import erlaubt."
+          "start_time": "Startzeit (24h). Mitternachtsübergang wird unterstützt.",
+          "end_time": "Endzeit (24h).",
+          "days": "Tage, an denen dieses Zeitfenster gilt.",
+          "battery_scope": "Wählen Sie 'all' für alle Batterien oder eine bestimmte.",
+          "allow_charge": "Wenn aktiviert, ist Laden während des Fensters erlaubt. Wenn KEIN Fenster Laden erlaubt, ist Laden standardmäßig frei.",
+          "allow_discharge": "Wenn aktiviert, ist Entladen während des Fensters erlaubt. Wenn KEIN Fenster Entladen erlaubt, ist Entladen standardmäßig frei.",
+          "soc_override_enabled": "Wenn aktiviert, überschreibt das Fenster den SOC max/min der Batterie.",
+          "power_override_enabled": "Wenn aktiviert, begrenzt oder erzwingt das Fenster die maximale Leistung.",
+          "mode": "PD: Der prädiktive Algorithmus regelt die Leistung mit dem Fenster-Limit. Manuell: Erzwungenes Entladen oder Laden bei der angegebenen Leistung."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Details des Fensters {slot_num}",
+        "description": "Stellen Sie die im Fenster konfigurierten SOC- und/oder Leistungslimits ein.",
+        "data": {
+          "soc_min": "Min. SOC (%)",
+          "soc_max": "Max. SOC (%)",
+          "max_charge_power_w": "Max. Ladeleistung (W)",
+          "max_discharge_power_w": "Max. Entladeleistung (W)"
+        },
+        "data_description": {
+          "soc_min": "Batterie entlädt sich während des Fensters nicht unter diesen SOC (Untergrenze 12%).",
+          "soc_max": "Batterie lädt sich während des Fensters nicht über diesen SOC (Obergrenze 100%).",
+          "max_charge_power_w": "Im PD-Modus dynamisches Limit. Im manuellen Modus die exakte Ladeleistung.",
+          "max_discharge_power_w": "Im PD-Modus dynamisches Limit. Im manuellen Modus die exakte Entladeleistung."
         }
       },
       "add_more_slots": {
@@ -331,8 +355,10 @@
       "cannot_connect": "Verbindung zur Batterie nicht möglich. Überprüfen Sie die IP-Adresse und dass die Batterie im Netzwerk erreichbar ist.",
       "sensor_not_found": "Solarprognose-Sensor existiert nicht. Überprüfen Sie, dass der Sensor verfügbar ist.",
       "invalid_unit": "Solarprognose-Sensor muss 'kWh' oder 'Wh' als Einheit haben.",
-      "overlapping_slots": "Dieses Zeitfenster überschneidet sich mit einem bestehenden. Passen Sie die Zeiten oder Tage an.",
+      "overlapping_slots": "Dieses Zeitfenster überschneidet sich mit einem bestehenden für dieselbe Batterie. Passen Sie Zeiten, Tage oder die Batterie an.",
       "midnight_crossing": "Die Startzeit muss vor der Endzeit liegen. Für Nachtperioden erstellen Sie zwei separate Zeitfenster (z.B. 22:00-23:59 und 00:00-06:00).",
+      "slot_does_nothing": "Das Zeitfenster muss mindestens eine Richtung erlauben (Laden oder Entladen).",
+      "manual_requires_power": "Manueller Modus benötigt aktivierte Leistungssteuerung.",
       "no_price_data": "Keine Preisdaten vom Sensor verfügbar. Nordpool: benötigt `raw_today`. PVPC: benötigt `price_00h` … `price_23h`. CKW: benötigt das Attribut `prices` mit einer Slot-Liste. EPEX: benötigt das Attribut `data` mit einer Slot-Liste. ENTSO-e: benötigt das Attribut `prices_today` mit einer Slot-Liste."
     },
     "abort": {
@@ -429,20 +455,44 @@
       },
       "add_time_slot": {
         "title": "Zeitfenster {slot_num}",
-        "description": "Definieren oder ändern Sie ein Zeitfenster, in dem Batterien entladen werden DÜRFEN.",
+        "description": "Legen Sie fest, wann und wie die Batterien arbeiten dürfen. Die Häkchen steuern jede Richtung, SOC und Leistung. Manueller Modus erzwingt eine exakte Leistung und umgeht den PD-Algorithmus.",
         "data": {
           "start_time": "Startzeit",
           "end_time": "Endzeit",
           "days": "Wochentage",
-          "apply_to_charge": "Auch auf Laden anwenden",
-          "target_grid_power": "Ziel-Netzleistung (W)"
+          "battery_scope": "Betroffene Batterie",
+          "allow_charge": "Laden erlauben",
+          "allow_discharge": "Entladen erlauben",
+          "soc_override_enabled": "SOC max/min des Fensters steuern",
+          "power_override_enabled": "Max. Lade-/Entladeleistung steuern",
+          "mode": "Betriebsmodus"
         },
         "data_description": {
-          "start_time": "Startzeit des Zeitfensters (24h-Format)",
-          "end_time": "Endzeit des Zeitfensters (24h-Format)",
-          "days": "Tage, an denen dieses Zeitfenster gilt",
-          "apply_to_charge": "Wenn aktiviert, schränkt das Zeitfenster auch das Laden ein (Batterie lädt nur während dieses Zeitfensters)",
-          "target_grid_power": "Netzleistung, auf die der Regler während dieses Zeitfensters reguliert. 0W = kein Netzfluss (Standard). Negativ = leichter Export (z.B. -150W). Positiv = leichter Import erlaubt."
+          "start_time": "Startzeit (24h). Mitternachtsübergang wird unterstützt.",
+          "end_time": "Endzeit (24h).",
+          "days": "Tage, an denen dieses Zeitfenster gilt.",
+          "battery_scope": "Wählen Sie 'all' für alle Batterien oder eine bestimmte.",
+          "allow_charge": "Wenn aktiviert, ist Laden während des Fensters erlaubt. Wenn KEIN Fenster Laden erlaubt, ist Laden standardmäßig frei.",
+          "allow_discharge": "Wenn aktiviert, ist Entladen während des Fensters erlaubt. Wenn KEIN Fenster Entladen erlaubt, ist Entladen standardmäßig frei.",
+          "soc_override_enabled": "Wenn aktiviert, überschreibt das Fenster den SOC max/min der Batterie.",
+          "power_override_enabled": "Wenn aktiviert, begrenzt oder erzwingt das Fenster die maximale Leistung.",
+          "mode": "PD: Der prädiktive Algorithmus regelt die Leistung mit dem Fenster-Limit. Manuell: Erzwungenes Entladen oder Laden bei der angegebenen Leistung."
+        }
+      },
+      "add_time_slot_details": {
+        "title": "Details des Fensters {slot_num}",
+        "description": "Stellen Sie die im Fenster konfigurierten SOC- und/oder Leistungslimits ein.",
+        "data": {
+          "soc_min": "Min. SOC (%)",
+          "soc_max": "Max. SOC (%)",
+          "max_charge_power_w": "Max. Ladeleistung (W)",
+          "max_discharge_power_w": "Max. Entladeleistung (W)"
+        },
+        "data_description": {
+          "soc_min": "Batterie entlädt sich während des Fensters nicht unter diesen SOC (Untergrenze 12%).",
+          "soc_max": "Batterie lädt sich während des Fensters nicht über diesen SOC (Obergrenze 100%).",
+          "max_charge_power_w": "Im PD-Modus dynamisches Limit. Im manuellen Modus die exakte Ladeleistung.",
+          "max_discharge_power_w": "Im PD-Modus dynamisches Limit. Im manuellen Modus die exakte Entladeleistung."
         }
       },
       "add_more_slots": {
@@ -687,8 +737,10 @@
       "cannot_connect": "Verbindung zur Batterie nicht möglich. Überprüfen Sie die IP-Adresse und dass die Batterie im Netzwerk erreichbar ist.",
       "sensor_not_found": "Solarprognose-Sensor existiert nicht. Überprüfen Sie, dass der Sensor verfügbar ist.",
       "invalid_unit": "Solarprognose-Sensor muss 'kWh' oder 'Wh' als Einheit haben.",
-      "overlapping_slots": "Dieses Zeitfenster überschneidet sich mit einem bestehenden. Passen Sie die Zeiten oder Tage an.",
+      "overlapping_slots": "Dieses Zeitfenster überschneidet sich mit einem bestehenden für dieselbe Batterie. Passen Sie Zeiten, Tage oder die Batterie an.",
       "midnight_crossing": "Die Startzeit muss vor der Endzeit liegen. Für Nachtperioden erstellen Sie zwei separate Zeitfenster (z.B. 22:00-23:59 und 00:00-06:00).",
+      "slot_does_nothing": "Das Zeitfenster muss mindestens eine Richtung erlauben (Laden oder Entladen).",
+      "manual_requires_power": "Manueller Modus benötigt aktivierte Leistungssteuerung.",
       "no_price_data": "Keine Preisdaten vom Sensor verfügbar. Nordpool: benötigt `raw_today`. PVPC: benötigt `price_00h` … `price_23h`. CKW: benötigt das Attribut `prices` mit einer Slot-Liste. EPEX: benötigt das Attribut `data` mit einer Slot-Liste. ENTSO-e: benötigt das Attribut `prices_today` mit einer Slot-Liste."
     }
   },
@@ -702,6 +754,17 @@
         "fri": "Freitag",
         "sat": "Samstag",
         "sun": "Sonntag"
+      }
+    },
+    "slot_mode": {
+      "options": {
+        "pd": "PD (prädiktiver Algorithmus)",
+        "manual": "Manuell (erzwungene Leistung)"
+      }
+    },
+    "slot_battery_scope": {
+      "options": {
+        "all": "Alle Batterien"
       }
     },
     "predictive_charging_mode": {
