@@ -319,22 +319,12 @@ class ActiveBalanceModeManager:
         started_ts: str,
     ) -> None:
         """Send a persistent notification when a scheduled balance run starts."""
-        start_vmax = getattr(coordinator, "active_balance_mode_start_max_cell_voltage", None)
-        start_vmin = getattr(coordinator, "active_balance_mode_start_min_cell_voltage", None)
         start_delta = getattr(coordinator, "active_balance_mode_start_delta_mv", None)
-        start_delta_source = getattr(coordinator, "active_balance_mode_start_delta_source", None)
         message = "\n".join(
             [
-                f"🔋 Battery: {coordinator.name}",
-                f"▶️ Started: {started_ts}",
-                f"Max duration: until delta <= {ACTIVE_BALANCE_MODE_TARGET_DELTA_V:.3f} V or manual stop",
-                f"Target delta: <= {ACTIVE_BALANCE_MODE_TARGET_DELTA_V:.3f} V",
-                f"Initial delta: {self._format_active_balance_value(start_delta, 'V', 4)}",
-                f"🧾 Initial delta source: {start_delta_source or 'n/a'}",
-                f"🔺 Initial max cell: {self._format_active_balance_value(start_vmax, 'V', 3)}",
-                f"🔻 Initial min cell: {self._format_active_balance_value(start_vmin, 'V', 3)}",
-                "",
-                "🚫 While running, this battery is excluded from normal PD control.",
+                f"📊 Initial delta: {self._format_active_balance_value(start_delta, 'V', 4)} "
+                f"(target ≤ {ACTIVE_BALANCE_MODE_TARGET_DELTA_V:.3f} V)",
+                "🚫 Battery paused from normal control while balancing.",
             ]
         )
         try:
@@ -373,39 +363,19 @@ class ActiveBalanceModeManager:
             "disabled": "Stopped by user",
         }.get(reason, reason)
 
-        final_vmax = getattr(coordinator, "active_balance_mode_last_cutoff_max_cell_voltage", None)
-        final_vmin = getattr(coordinator, "active_balance_mode_last_cutoff_min_cell_voltage", None)
         final_delta = getattr(coordinator, "active_balance_mode_last_cutoff_delta_v", None)
         if final_delta is None:
             final_delta = getattr(coordinator, "active_balance_mode_last_cutoff_delta_mv", None)
-        final_delta_source = getattr(coordinator, "active_balance_mode_last_cutoff_source", None)
-        final_cutoff_ts = getattr(coordinator, "active_balance_mode_last_cutoff_ts", None)
-        final_cutoff_soc = getattr(coordinator, "active_balance_mode_last_cutoff_soc", None)
         if final_delta is None:
             monitor = getattr(self._controller, "_balance_monitor", None)
             if monitor is not None:
                 readings = monitor.get_recent_readings(coordinator.host, limit=1)
                 if readings:
-                    last = readings[-1]
                     try:
-                        last_delta_mv = float(last.get("delta_mV"))
-                        last_vmax = float(last.get("vmax_V"))
-                        last_vmin = float(last.get("vmin_V"))
+                        final_delta = float(readings[-1].get("delta_mV")) / 1000.0
                     except (TypeError, ValueError):
-                        last_delta_mv = None
-                        last_vmax = None
-                        last_vmin = None
-                    if last_delta_mv is not None:
-                        final_delta = last_delta_mv / 1000.0
-                        final_vmax = last_vmax
-                        final_vmin = last_vmin
-                        ts = last.get("ts")
-                        final_delta_source = f"measurement_3.58V ({ts})" if ts else "measurement_3.58V"
-                        final_cutoff_ts = ts
+                        final_delta = None
         start_delta = getattr(coordinator, "active_balance_mode_start_delta_mv", None)
-        start_delta_source = getattr(coordinator, "active_balance_mode_start_delta_source", None)
-        start_vmax = getattr(coordinator, "active_balance_mode_start_max_cell_voltage", None)
-        start_vmin = getattr(coordinator, "active_balance_mode_start_min_cell_voltage", None)
         improvement = None
         if start_delta is not None and final_delta is not None:
             try:
@@ -415,23 +385,11 @@ class ActiveBalanceModeManager:
 
         message = "\n".join(
             [
-                f"🔋 Battery: {coordinator.name}",
-                f"✅ Result: {reason_text}",
-                f"▶️ Started: {started_ts or 'n/a'}",
+                f"✅ {reason_text}",
+                f"📊 Delta: {self._format_active_balance_value(start_delta, 'V', 4)} → "
+                f"{self._format_active_balance_value(final_delta, 'V', 4)} "
+                f"(improvement {self._format_active_balance_value(improvement, 'V', 4)})",
                 f"⏱️ Duration: {self._format_active_balance_value(elapsed_h, 'h', 2)}",
-                "",
-                f"Initial delta: {self._format_active_balance_value(start_delta, 'V', 4)}",
-                f"🧾 Initial delta source: {start_delta_source or 'n/a'}",
-                f"Final delta: {self._format_active_balance_value(final_delta, 'V', 4)}",
-                f"Final delta source: {final_delta_source or 'n/a'}",
-                f"Last 3.58 V measurement: {final_cutoff_ts or 'n/a'}",
-                f"SOC at last cutoff: {self._format_active_balance_value(final_cutoff_soc, '%')}",
-                f"Improvement: {self._format_active_balance_value(improvement, 'V', 4)}",
-                "",
-                f"🔺 Initial max cell: {self._format_active_balance_value(start_vmax, 'V', 3)}",
-                f"🔻 Initial min cell: {self._format_active_balance_value(start_vmin, 'V', 3)}",
-                f"🔺 Final max cell: {self._format_active_balance_value(final_vmax, 'V', 3)}",
-                f"🔻 Final min cell: {self._format_active_balance_value(final_vmin, 'V', 3)}",
             ]
         )
         try:

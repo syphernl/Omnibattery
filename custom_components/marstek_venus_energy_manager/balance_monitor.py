@@ -303,8 +303,10 @@ class BalanceMonitor:
         if status == "red" and bat["consecutive_red"] >= BALANCE_RED_CONSECUTIVE_ALERT:
             severe = True
             issues.append(
-                f"Possible degraded cell: {delta_mv:.0f} mV delta for "
-                f"{bat['consecutive_red']} consecutive full charges. Check battery condition."
+                f"High cell imbalance ({delta_mv:.0f} mV) for "
+                f"{bat['consecutive_red']} consecutive full charges. Consider "
+                f"enabling the 'Active Balance Mode' switch for this battery to "
+                f"rebalance the cells."
             )
 
         return status, severe
