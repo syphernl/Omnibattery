@@ -12,6 +12,7 @@ from .const import (
     DOMAIN,
     BALANCE_STORAGE_KEY,
     BALANCE_STORAGE_VERSION,
+    BALANCE_BASELINE_OFFSET_MV,
     BALANCE_THRESHOLD_YELLOW,
     BALANCE_THRESHOLD_ORANGE,
     BALANCE_THRESHOLD_RED,
@@ -335,7 +336,7 @@ class BalanceMonitor:
         if (
             trend["trend"] == "rising"
             and trend["avg_4w"] is not None
-            and trend["avg_4w"] > BALANCE_TREND_ALERT_AVG_MV
+            and self._effective_delta(trend["avg_4w"]) > BALANCE_TREND_ALERT_AVG_MV
         ):
             issues.append(
                 f"Rising imbalance trend: +{trend['slope']:.1f} mV/reading, "
@@ -414,12 +415,24 @@ class BalanceMonitor:
     # Helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _effective_delta(delta_mv: float) -> float:
+        """Subtract the factory baseline imbalance, floored at 0.
+
+        Marstek cells ship with a large top-of-charge spread that is normal, not
+        a fault. Used only by the rising-trend magnitude gate so steady
+        factory-level readings do not trip a trend alert. Status thresholds are
+        absolute and applied to the raw delta directly.
+        """
+        return max(0.0, delta_mv - BALANCE_BASELINE_OFFSET_MV)
+
     def _status_for_delta(self, delta_mv: float) -> str:
-        if delta_mv < BALANCE_THRESHOLD_YELLOW:
+        effective_mv = self._effective_delta(delta_mv)
+        if effective_mv < BALANCE_THRESHOLD_YELLOW:
             return "green"
-        if delta_mv < BALANCE_THRESHOLD_ORANGE:
+        if effective_mv < BALANCE_THRESHOLD_ORANGE:
             return "yellow"
-        if delta_mv < BALANCE_THRESHOLD_RED:
+        if effective_mv < BALANCE_THRESHOLD_RED:
             return "orange"
         return "red"
 
