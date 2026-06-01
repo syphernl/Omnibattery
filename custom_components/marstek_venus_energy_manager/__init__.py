@@ -229,8 +229,10 @@ async def _async_register_frontend_panel(hass: HomeAssistant, entry: ConfigEntry
                 panel_config["solar_entity"] = data[CONF_SOLAR_PRODUCTION_SENSOR]
 
         # Remove any previous registration so the module URL / config refresh.
+        # warn_if_unknown=False: on first setup after restart the panel isn't
+        # registered yet, and HA would log "Removing unknown panel marstek-venus".
         try:
-            frontend.async_remove_panel(hass, PANEL_URL_PATH)
+            frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
         except Exception:  # noqa: BLE001 - not registered yet is fine
             pass
 
@@ -260,7 +262,7 @@ def _async_unregister_frontend_panel(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components import frontend
 
-        frontend.async_remove_panel(hass, PANEL_URL_PATH)
+        frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
     except Exception as e:  # noqa: BLE001
         _LOGGER.debug("Error removing Marstek Venus panel: %s", e)
     finally:
@@ -6818,6 +6820,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         controller = data.get("controller")
         if controller and controller._hourly_balance_mgr is not None:
             await controller._hourly_balance_mgr.async_unload()
+
+        # Persist all throttled accumulators (consumption history + grid-at-min-soc,
+        # daily solar/home/grid energy totals, household/solar accumulators) so a
+        # reload doesn't revert these TOTAL_INCREASING sensors to the last throttled
+        # (~5 min) save, which would step their values backwards and spam the log.
+        if controller and controller._consumption_tracker is not None:
+            await controller._consumption_tracker.async_save_all()
 
         if unload_ok:
             hass.data[DOMAIN].pop(entry.entry_id, None)

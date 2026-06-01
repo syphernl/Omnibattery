@@ -144,14 +144,21 @@ class ConsumptionTracker:
 
     def save_accumulators(self) -> None:
         """Fire-and-forget: persist household and solar accumulators to storage."""
+        asyncio.create_task(self.async_save_accumulators())
+
+    async def async_save_accumulators(self) -> None:
+        """Await-able persist of household and solar accumulators (used on unload)."""
         if not self._controller.household_consumption_sensor:
             return
         ctrl = self._controller
-        asyncio.create_task(self._accumulator_store.async_save({
-            "date": ctrl._household_accumulator_date.isoformat() if ctrl._household_accumulator_date else None,
-            "household_kwh": round(ctrl._household_energy_accumulator, 4),
-            "solar_kwh": round(ctrl._solar_production_accumulator, 4),
-        }))
+        try:
+            await self._accumulator_store.async_save({
+                "date": ctrl._household_accumulator_date.isoformat() if ctrl._household_accumulator_date else None,
+                "household_kwh": round(ctrl._household_energy_accumulator, 4),
+                "solar_kwh": round(ctrl._solar_production_accumulator, 4),
+            })
+        except Exception as e:
+            _LOGGER.error("Failed to save accumulators: %s", e)
 
     async def load_accumulators(self) -> None:
         """Restore household and solar accumulators from storage (today's values only)."""
@@ -179,16 +186,23 @@ class ConsumptionTracker:
 
     def save_daily_energy(self) -> None:
         """Fire-and-forget: persist the exact daily solar/home/grid energy totals."""
+        asyncio.create_task(self.async_save_daily_energy())
+
+    async def async_save_daily_energy(self) -> None:
+        """Await-able persist of the daily energy totals (used on unload)."""
         ctrl = self._controller
         # The grid meter (consumption_sensor) is always configured, so this always
         # has something worth saving (import/export); the date is keyed to today.
-        asyncio.create_task(self._daily_energy_store.async_save({
-            "date": date.today().isoformat(),
-            "solar_kwh": round(ctrl._daily_solar_energy_kwh, 4),
-            "home_kwh": round(ctrl._daily_home_energy_kwh, 4),
-            "grid_import_kwh": round(ctrl._daily_grid_import_energy_kwh, 4),
-            "grid_export_kwh": round(ctrl._daily_grid_export_energy_kwh, 4),
-        }))
+        try:
+            await self._daily_energy_store.async_save({
+                "date": date.today().isoformat(),
+                "solar_kwh": round(ctrl._daily_solar_energy_kwh, 4),
+                "home_kwh": round(ctrl._daily_home_energy_kwh, 4),
+                "grid_import_kwh": round(ctrl._daily_grid_import_energy_kwh, 4),
+                "grid_export_kwh": round(ctrl._daily_grid_export_energy_kwh, 4),
+            })
+        except Exception as e:
+            _LOGGER.error("Failed to save daily energy: %s", e)
 
     async def load_daily_energy(self) -> None:
         """Restore the daily solar/home/grid energy totals (today's values only)."""
@@ -1296,3 +1310,15 @@ class ConsumptionTracker:
         if self._grid_at_min_soc_save_counter >= 120:
             self._grid_at_min_soc_save_counter = 0
             await self.save_consumption_history()
+
+    async def async_save_all(self) -> None:
+        """Await every throttled persistence store at once.
+
+        Called on unload so a reload does not revert the TOTAL_INCREASING daily
+        energy sensors (consumption history + grid-at-min-soc, daily solar/home/
+        grid totals, household/solar accumulators) to the last throttled (~5 min)
+        save, which would step their values backwards and spam the HA log.
+        """
+        await self.save_consumption_history()
+        await self.async_save_accumulators()
+        await self.async_save_daily_energy()
