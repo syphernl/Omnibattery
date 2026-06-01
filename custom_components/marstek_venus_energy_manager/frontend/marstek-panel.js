@@ -2016,11 +2016,23 @@ class MarstekVenusPanel extends HTMLElement {
         }
         return { text: disp, tone: "neutral" };
       }
-      case K.activeBatteries:
-        if (raw.startsWith("discharging")) return { text: this._t("discharging"), tone: "good" };
-        if (raw.startsWith("charging")) return { text: this._t("charging"), tone: "good" };
+      case K.activeBatteries: {
+        // State is "Discharging: <names>" / "Charging: <names>" / "Idle"; the
+        // battery names also live in attributes. Show the active battery, not
+        // just the direction word. Fall back to parsing the state if attrs miss.
+        const a = so.attributes || {};
+        const afterColon = String(so.state).split(":").slice(1).join(":").trim();
+        if (raw.startsWith("discharging")) {
+          const names = (a.discharge_batteries && a.discharge_batteries.join(", ")) || afterColon;
+          return { text: names ? `${this._t("discharging")}: ${names}` : this._t("discharging"), tone: "good" };
+        }
+        if (raw.startsWith("charging")) {
+          const names = (a.charge_batteries && a.charge_batteries.join(", ")) || afterColon;
+          return { text: names ? `${this._t("charging")}: ${names}` : this._t("charging"), tone: "good" };
+        }
         if (raw === "idle") return { text: this._t("idle"), tone: "neutral" };
         return { text: disp, tone: "neutral" };
+      }
       case K.integration: {
         let tone = "good";
         if (raw.includes("blocked") || raw.includes("pause") || raw.includes("backup")) tone = "warn";
