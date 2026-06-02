@@ -47,7 +47,7 @@ Si HA se reinicia después de la ventana de las 00:05 sin evaluación previa, el
 
 La opción **"Descargar solo cuando el precio supere el umbral"** añade una condición adicional al comportamiento de descarga.
 
-Cuando está activa, en **cada ciclo del controlador (~2,5 s)** se evalúa si el precio actual permite la descarga:
+Cuando está activa, en **cada ciclo del controlador (dirigido por eventos)** se evalúa si el precio actual permite la descarga:
 
 ```
 Si precio_actual > umbral:

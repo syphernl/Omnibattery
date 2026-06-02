@@ -24,7 +24,7 @@ The energy the battery has discharged during the day, read directly from each ba
 
 When **all batteries are at min SOC** and can no longer discharge, the household must draw from the grid to cover its consumption. That grid-imported energy is real household consumption the battery could not serve.
 
-The integration accumulates it in real time every controller cycle (~2.5 s) while all of these conditions are simultaneously met:
+The integration accumulates it in real time on every control cycle (event-driven, at the grid sensor's cadence) while all of these conditions are simultaneously met:
 
 | Condition | Detail |
 |---|---|
@@ -36,8 +36,10 @@ The integration accumulates it in real time every controller cycle (~2.5 s) whil
 When all conditions are met, the accumulator grows proportionally to grid import:
 
 ```
-increment (kWh) = grid_power (W) × 2.5 s / 3,600,000
+increment (kWh) = grid_power (W) × Δt (s) / 3,600,000
 ```
+
+`Δt` is the real elapsed time since the previous accumulation (so it adapts to the variable, event-driven cadence). A gap longer than 10 s — meaning the conditions were not continuously met — is treated as a fresh start and no energy is counted across it.
 
 This accumulator is exposed as the **`Grid at Min SOC`** sensor (kWh) and resets at midnight.
 

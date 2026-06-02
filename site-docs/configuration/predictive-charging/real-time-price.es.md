@@ -1,6 +1,6 @@
 # Carga predictiva — Modo Precio en Tiempo Real
 
-Activa o desactiva la carga desde la red en cada ciclo del controlador (~2,5 s) en función del **precio actual de la electricidad**.
+Activa o desactiva la carga desde la red en cada ciclo del controlador (dirigido por eventos) en función del **precio actual de la electricidad**.
 
 A diferencia del Modo Precio Dinámico, no requiere previsión de precios ni evaluación nocturna. Reacciona puramente al precio en curso.
 
@@ -19,7 +19,7 @@ A diferencia del Modo Precio Dinámico, no requiere previsión de precios ni eva
 
 ## Comportamiento de carga
 
-Cada ciclo (~2,5 s) el controlador evalúa si arrancar o detener la carga desde la red:
+Cada ciclo (dirigido por eventos) el controlador evalúa si arrancar o detener la carga desde la red:
 
 ```
 Si precio_actual ≤ umbral:
@@ -46,7 +46,7 @@ Si ninguno está disponible, el modo no actúa.
 
 La opción **"Descargar solo cuando el precio supere el umbral"** añade una condición adicional al comportamiento de descarga, independiente de la carga.
 
-Cuando está activa, en **cada ciclo del controlador (~2,5 s)** se comprueba si el precio actual justifica la descarga usando el mismo umbral que para la carga:
+Cuando está activa, en **cada ciclo del controlador (dirigido por eventos)** se comprueba si el precio actual justifica la descarga usando el mismo umbral que para la carga:
 
 ```
 Si precio_actual > umbral:

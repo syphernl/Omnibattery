@@ -15,7 +15,7 @@ from homeassistant.const import Platform, CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceEntry
-from homeassistant.helpers.event import async_track_time_interval, async_track_time_change
+from homeassistant.helpers.event import async_track_time_interval, async_track_time_change, async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -329,6 +329,8 @@ class ChargeDischargeController:
         self._last_sensor_update_time = None    # datetime of last real sensor change (HA last_updated)
         self._stale_cycles = 0                  # consecutive cycles without sensor change
         self._max_stale_cycles = 15             # safety valve: ~30s before forcing recalculation
+        self._control_lock = asyncio.Lock()     # serialize control cycle across timer + sensor-event triggers
+        self._grid_at_min_soc_last_ts = None     # last accumulation timestamp for grid-at-min-soc kWh integration
 
         # Normal high-SOC charge protection. These must exist before the first
         # capacity calculation because _battery_power_limit() reads them.
@@ -516,6 +518,8 @@ class ChargeDischargeController:
         self._charge_delay_last_date = None       # For daily reset
         self._charge_delay_forecast_cache = None  # Last forecast value used for balance check
         self._charge_delay_balance_needs_charge = True  # Cached balance result (conservative default)
+        self._forecast_unavailable_since = None   # monotonic ts when a configured forecast sensor first read unavailable
+        self._forecast_grace_s = 300              # hold the delay through forecast blips / HA-startup sensor loading before unlocking
         self._solar_t_start = None
         self._delay_last_log_time = 0           # Throttle logging to every 5 minutes
         self._force_full_charge = False         # Manual trigger via button, resets on day change
@@ -2457,17 +2461,41 @@ class ChargeDischargeController:
             _LOGGER.info("Charge Delay: No solar forecast sensor configured - unlocking (reason: no_forecast)")
             return _unlock("no_forecast")
 
+        # A configured forecast sensor can briefly read unavailable/unknown/invalid
+        # while it updates. Treating that transient blip as "no forecast" would
+        # commit a PERMANENT daily unlock (see _is_charge_delayed), so a momentary
+        # gap silently disables the delay for the rest of the day. Instead, hold the
+        # current delay through a short grace window and only unlock if the sensor
+        # stays unavailable. (A sensor that is not configured at all still unlocks
+        # immediately above — that is a deliberate fail-safe, not a transient.)
         forecast_state = self.hass.states.get(self.solar_forecast_sensor)
-        if forecast_state is None or forecast_state.state in ("unknown", "unavailable"):
-            _LOGGER.info("Charge Delay: Solar forecast sensor unavailable - unlocking (reason: no_forecast)")
+        raw_forecast = None
+        if forecast_state is not None and forecast_state.state not in ("unknown", "unavailable"):
+            try:
+                raw_forecast = float(forecast_state.state)
+            except (ValueError, TypeError):
+                raw_forecast = None
+
+        if raw_forecast is None:
+            mono = monotonic()
+            if self._forecast_unavailable_since is None:
+                self._forecast_unavailable_since = mono
+            unavailable_s = mono - self._forecast_unavailable_since
+            if unavailable_s < self._forecast_grace_s:
+                status["state"] = "Waiting for forecast"
+                _LOGGER.debug(
+                    "Charge Delay: forecast unavailable for %.0fs (< %ds grace) - holding delay",
+                    unavailable_s, self._forecast_grace_s,
+                )
+                return True  # keep the delay active; re-evaluate when the sensor recovers
+            _LOGGER.info(
+                "Charge Delay: Solar forecast unavailable for %.0fs (> grace) - unlocking (reason: no_forecast)",
+                unavailable_s,
+            )
             return _unlock("no_forecast")
 
-        try:
-            raw_forecast = float(forecast_state.state)
-        except (ValueError, TypeError):
-            _LOGGER.info("Charge Delay: Invalid solar forecast value '%s' - unlocking (reason: no_forecast)", forecast_state.state)
-            return _unlock("no_forecast")
-
+        # Forecast recovered / valid — clear the transient tracker.
+        self._forecast_unavailable_since = None
         forecast_today = raw_forecast * 0.85  # 15% conservative correction
         status["forecast_kwh"] = raw_forecast
 
@@ -5546,6 +5574,21 @@ class ChargeDischargeController:
         return stopped
 
     async def async_update_charge_discharge(self, now=None):
+        """Run one control cycle, guarded against overlapping triggers.
+
+        Invoked by both the periodic safety timer and the consumption-sensor
+        state-change event. If a cycle is already running, the overlapping
+        trigger is skipped: the in-flight cycle already reads the current state,
+        so re-entering would only risk concurrent Modbus writes.
+        """
+        if self._control_lock.locked():
+            if DEBUG_CONTROL_LOOP_DETAIL:
+                _LOGGER.debug("Control cycle already running; skipping overlapping trigger.")
+            return
+        async with self._control_lock:
+            await self._run_control_cycle(now)
+
+    async def _run_control_cycle(self, now=None):
         """Update the charge/discharge power of the batteries."""
         if DEBUG_CONTROL_LOOP_DETAIL:
             _LOGGER.debug("ChargeDischargeController: async_update_charge_discharge started.")
@@ -5598,6 +5641,7 @@ class ChargeDischargeController:
                     self._charge_delay_unlocked = False
                     self._delay_setpoint_reached = False
                     self._solar_t_start = None
+                    self._forecast_unavailable_since = None
                 # On first cycle after HA restart (_charge_delay_last_date is None),
                 # _charge_delay_unlocked may have been restored from storage by
                 # _weekly_charge_mgr.load_state() — preserve it rather than wiping it.
@@ -6196,18 +6240,26 @@ class ChargeDischargeController:
                 self._get_active_slot(c, "discharge") is not None for c in self.coordinators
             )
             if in_discharge_window:
-                # sensor_actual is in W; cycle is ~2.5 s → convert to kWh
-                interval_kwh = sensor_actual * 2.5 / 3_600_000
-                self._daily_grid_at_min_soc_kwh += interval_kwh
-                if self._grid_at_min_soc_sensor:
-                    self._grid_at_min_soc_sensor.async_write_ha_state()
-                _LOGGER.debug(
-                    "Grid-at-min-soc: +%.4f kWh (grid=%.0fW), daily total=%.3f kWh",
-                    interval_kwh, sensor_actual, self._daily_grid_at_min_soc_kwh,
-                )
-                # Persist to Store every ~5 minutes (120 cycles × 2.5 s) so reloads don't lose the day's accumulation
-                if self._consumption_tracker is not None:
-                    await self._consumption_tracker.maybe_save_grid_at_min_soc_history()
+                # Cycle cadence is now variable (event- and timer-driven), so integrate
+                # over the real elapsed time since the last accumulation instead of a
+                # fixed step. A gap (>10s) means the condition was inactive in between;
+                # treat it as a fresh start so we never count energy across the gap.
+                now_ts = dt_util.utcnow()
+                last_ts = self._grid_at_min_soc_last_ts
+                self._grid_at_min_soc_last_ts = now_ts
+                if last_ts is not None and (now_ts - last_ts).total_seconds() <= 10.0:
+                    dt_s = (now_ts - last_ts).total_seconds()
+                    interval_kwh = sensor_actual * dt_s / 3_600_000
+                    self._daily_grid_at_min_soc_kwh += interval_kwh
+                    if self._grid_at_min_soc_sensor:
+                        self._grid_at_min_soc_sensor.async_write_ha_state()
+                    _LOGGER.debug(
+                        "Grid-at-min-soc: +%.4f kWh (grid=%.0fW, dt=%.1fs), daily total=%.3f kWh",
+                        interval_kwh, sensor_actual, dt_s, self._daily_grid_at_min_soc_kwh,
+                    )
+                    # Persist to Store periodically so reloads don't lose the day's accumulation
+                    if self._consumption_tracker is not None:
+                        await self._consumption_tracker.maybe_save_grid_at_min_soc_history()
 
         if not available_batteries:
             _LOGGER.debug("ChargeDischargeController: No available batteries, setting all to 0.")
@@ -6655,6 +6707,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     entry.async_on_unload(unsub_refresh)
 
+    # Event-driven control: also run the control cycle the instant the grid
+    # consumption sensor publishes a new value, so PD reacts at the sensor's
+    # native cadence instead of waiting for the next safety-timer tick. The
+    # timer above stays as a watchdog (runs the time-based subsystems and forces
+    # a safety recalculation if the sensor goes silent). Overlapping triggers
+    # are serialized by the controller's _control_lock.
+    async def _on_consumption_changed(event):
+        # Do not forward the Event as `now`; the handler expects datetime|None.
+        await controller.async_update_charge_discharge()
+
+    unsub_consumption = async_track_state_change_event(
+        hass, [controller.consumption_sensor], _on_consumption_changed
+    )
+    entry.async_on_unload(unsub_consumption)
+
     # Set up hourly balance manager if enabled
     if controller._hourly_balance_mgr is not None:
         await controller._hourly_balance_mgr.async_setup()
@@ -6673,6 +6740,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "controller": controller,
         "unsub_control": unsub_control,
         "unsub_refresh": unsub_refresh,
+        "unsub_consumption": unsub_consumption,
         "balance_monitor": balance_monitor,
     }
 
@@ -6749,6 +6817,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if unsub := data.get("unsub_control"):
             unsub()
         if unsub := data.get("unsub_refresh"):
+            unsub()
+        if unsub := data.get("unsub_consumption"):
             unsub()
 
         # 2. Set shutdown flag on all coordinators to suppress expected errors

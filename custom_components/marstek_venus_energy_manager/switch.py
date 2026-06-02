@@ -585,6 +585,13 @@ class ChargeDelaySwitch(SwitchEntity):
         """Enable charge delay."""
         self.controller.charge_delay_enabled = True
         self.controller._charge_delay_status["state"] = "Idle"
+        # Re-enabling re-evaluates the delay from scratch: clear an unlock committed
+        # earlier today (e.g. by a transient forecast blip) so it can be recovered on
+        # demand, without waiting for the midnight reset.
+        self.controller._charge_delay_unlocked = False
+        self.controller._delay_setpoint_reached = False
+        self.controller._forecast_unavailable_since = None
+        self.controller._schedule_charge_delay_state_save()
         new_data = dict(self.entry.data)
         new_data[CONF_ENABLE_CHARGE_DELAY] = True
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)

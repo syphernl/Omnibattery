@@ -1,6 +1,6 @@
 # PD Controller
 
-The PD (Proportional-Derivative) controller is the core of the integration. It runs every **2.5 seconds** and adjusts battery power to keep grid flow close to the configured target (default: 0 W).
+The PD (Proportional-Derivative) controller is the core of the integration. It runs **event-driven** — recalculating each time the grid consumption sensor publishes a new value — and adjusts battery power to keep grid flow close to the configured target (default: 0 W).
 
 ## Algorithm
 
@@ -23,6 +23,14 @@ new_power = current_power + adjustment
 | Deadband | `±40 W` | Dead zone: ignores small errors |
 | Rate limit | `±500 W/cycle` | Maximum change per cycle |
 
+## Control cadence
+
+The controller is **event-driven**: it recalculates the moment the grid consumption sensor publishes a new value, so it reacts at the sensor's native rate (often once per second) instead of waiting for a fixed timer tick.
+
+A periodic **2-second watchdog** runs in parallel. While the sensor is updating normally it does almost nothing — the event has already handled the latest value. Its job is to keep the time-based subsystems running and to force a **safety recalculation if the sensor goes silent** (after ~30 s without updates the controller re-evaluates instead of holding the last command indefinitely).
+
+Overlapping runs are prevented by a lock: if a cycle is still in progress when the next trigger fires, that trigger is skipped (the running cycle already reads the current state). This keeps the battery Modbus writes serialised.
+
 ## Stabilisation mechanisms
 
 ### Deadband (dead zone)
@@ -31,7 +39,7 @@ If the error is less than ±40 W, the controller does not adjust power. This pre
 
 ### Rate limiting
 
-Power changes are limited to ±500 W per cycle to smooth transitions and protect the battery from abrupt changes.
+Power changes are limited per cycle to smooth transitions and protect the battery from abrupt changes. A "cycle" is one control update, which is now driven by each new sensor value — so with a fast sensor (e.g. 1 s updates) the effective power-ramp rate rises accordingly. Lower the limit if the response feels abrupt.
 
 ### Oscillation detection
 

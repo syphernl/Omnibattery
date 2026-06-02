@@ -1,6 +1,6 @@
 # Predictive charging — Real-Time Price mode
 
-Activates or deactivates grid charging every controller cycle (~2.5 s) based on the **current electricity price**.
+Activates or deactivates grid charging every controller cycle (event-driven) based on the **current electricity price**.
 
 Unlike Dynamic Pricing mode, it requires no price forecast and no overnight evaluation. It reacts purely to the live price.
 
@@ -19,7 +19,7 @@ Unlike Dynamic Pricing mode, it requires no price forecast and no overnight eval
 
 ## Charging behaviour
 
-Every cycle (~2.5 s) the controller evaluates whether to start or stop grid charging:
+Every cycle (event-driven) the controller evaluates whether to start or stop grid charging:
 
 ```
 If current_price ≤ threshold:
@@ -46,7 +46,7 @@ If neither is available, the mode does not act.
 
 The **"Only discharge when price exceeds threshold"** option adds an extra condition to discharge behaviour, independent of charging.
 
-When active, **every controller cycle (~2.5 s)** checks whether the current price justifies discharge using the same threshold as for charging:
+When active, **every controller cycle (event-driven)** checks whether the current price justifies discharge using the same threshold as for charging:
 
 ```
 If current_price > threshold:

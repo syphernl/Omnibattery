@@ -10,7 +10,7 @@ Sensor de Home Assistant que mide el intercambio de potencia con la red (en **W*
     Cualquier sensor que exponga la potencia de red funciona: Shelly EM, Shelly EM3, Neurio, integraciones de contador inteligente (e.g. `sensor.grid_power`).
 
 !!! warning "Frecuencia de actualización"
-    El sensor debe actualizarse lo más rápido posible. El controlador opera cada **2,5 segundos** y toma decisiones basadas en la última lectura disponible — cuanto más antigua sea la lectura, menos precisa será la respuesta.
+    El sensor debe actualizarse lo más rápido posible. El controlador es **dirigido por eventos** —recalcula cada vez que este sensor publica un valor nuevo—, así que la frecuencia de actualización del sensor *es* la frecuencia de control: un sensor más rápido implica una respuesta más rápida y precisa. (Un watchdog de 2 segundos sigue ejecutando el ciclo si el sensor se queda en silencio.)
 
     El consumo del hogar puede variar varios kilovatios en fracciones de segundo (arranque de electrodomésticos, horno, lavadora…). Un sensor que reporta cada 10 segundos o más introduce un desfase que hace que el controlador reaccione a una situación que ya no existe, provocando sobreoscilaciones o correcciones innecesarias.
 

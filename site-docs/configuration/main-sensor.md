@@ -10,7 +10,7 @@ A Home Assistant sensor that measures power exchange with the grid (in **W** or 
     Any sensor that exposes grid power works: Shelly EM, Shelly EM3, Neurio, smart meter integrations (e.g. `sensor.grid_power`).
 
 !!! warning "Update frequency"
-    The sensor should update as fast as possible. The controller runs every **2.5 seconds** and makes decisions based on the most recent reading available — the older the reading, the less accurate the response.
+    The sensor should update as fast as possible. The controller is **event-driven** — it recalculates each time this sensor publishes a new value — so the sensor's update rate *is* the control rate: a faster sensor means a faster, more accurate response. (A 2-second watchdog still runs the cycle if the sensor goes quiet.)
 
     Home consumption can vary by several kilowatts in fractions of a second (appliance start-ups, oven, washing machine…). A sensor that reports every 10 seconds or more introduces a lag that causes the controller to react to a situation that no longer exists, leading to overshoot or unnecessary corrections.
 

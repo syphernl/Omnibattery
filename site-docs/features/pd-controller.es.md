@@ -1,6 +1,6 @@
 # Controlador PD
 
-El controlador PD (Proporcional-Derivativo) es el núcleo de la integración. Se ejecuta cada **2,5 segundos** y ajusta la potencia de la batería para mantener el flujo de red cercano al objetivo configurado (por defecto, 0 W).
+El controlador PD (Proporcional-Derivativo) es el núcleo de la integración. Se ejecuta **dirigido por eventos** —recalcula cada vez que el sensor de consumo de red publica un valor nuevo— y ajusta la potencia de la batería para mantener el flujo de red cercano al objetivo configurado (por defecto, 0 W).
 
 ## Algoritmo
 
@@ -23,6 +23,14 @@ nueva_potencia = potencia_actual + ajuste
 | Deadband | `±40 W` | Zona muerta: ignora errores pequeños |
 | Rate limit | `±500 W/ciclo` | Límite de cambio por ciclo |
 
+## Cadencia de control
+
+El controlador es **dirigido por eventos**: recalcula en el instante en que el sensor de consumo de red publica un valor nuevo, por lo que reacciona a la cadencia nativa del sensor (a menudo una vez por segundo) en lugar de esperar a un tick de temporizador fijo.
+
+En paralelo corre un **watchdog de 2 segundos**. Mientras el sensor se actualiza con normalidad casi no hace nada —el evento ya procesó el último valor—; su función es mantener en marcha los subsistemas basados en tiempo y forzar una **recálculo de seguridad si el sensor se queda en silencio** (tras ~30 s sin actualizaciones el controlador reevalúa en vez de mantener el último comando indefinidamente).
+
+Un lock evita ejecuciones solapadas: si un ciclo sigue en curso cuando se dispara el siguiente trigger, ese trigger se descarta (el ciclo en curso ya lee el estado actual). Así las escrituras Modbus a la batería quedan serializadas.
+
 ## Mecanismos de estabilización
 
 ### Deadband (zona muerta)
@@ -31,7 +39,7 @@ Si el error es menor de ±40 W, el controlador no ajusta la potencia. Evita micr
 
 ### Rate limiting
 
-El cambio de potencia se limita a ±500 W por ciclo para suavizar las transiciones y proteger la batería de cambios bruscos.
+El cambio de potencia se limita por ciclo para suavizar las transiciones y proteger la batería de cambios bruscos. Un «ciclo» es una actualización de control, que ahora se dispara con cada valor nuevo del sensor — así que con un sensor rápido (p. ej. actualizaciones cada 1 s) la tasa efectiva de rampa de potencia sube en proporción. Baja el límite si la respuesta se siente brusca.
 
 ### Detección de oscilaciones
 

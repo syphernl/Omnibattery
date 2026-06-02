@@ -47,7 +47,7 @@ If HA restarts after the 00:05 window without a prior evaluation, the controller
 
 The **"Only discharge when price is above threshold"** option adds an extra condition to discharge behaviour.
 
-When active, **every controller cycle (~2.5 s)** checks whether the current price allows discharge:
+When active, **every controller cycle (event-driven)** checks whether the current price allows discharge:
 
 ```
 If current_price > threshold:

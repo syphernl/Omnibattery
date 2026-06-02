@@ -24,7 +24,7 @@ La energía que la batería ha descargado durante el día, leída directamente d
 
 Cuando **todas las baterías están al SOC mínimo** y ya no pueden descargar más, el hogar tiene que tirar de la red para cubrir su consumo. Esa energía importada de la red es consumo real del hogar que la batería no pudo atender.
 
-La integración la acumula en tiempo real cada ciclo del controlador (~2,5 s) mientras se cumplan estas condiciones simultáneamente:
+La integración la acumula en tiempo real en cada ciclo de control (dirigido por eventos, a la cadencia del sensor de red) mientras se cumplan estas condiciones simultáneamente:
 
 | Condición | Detalle |
 |---|---|
@@ -36,8 +36,10 @@ La integración la acumula en tiempo real cada ciclo del controlador (~2,5 s) mi
 Cuando se cumplen todas las condiciones, el acumulador crece proporcionalmente a la importación de red:
 
 ```
-incremento (kWh) = potencia_red (W) × 2,5 s / 3 600 000
+incremento (kWh) = potencia_red (W) × Δt (s) / 3 600 000
 ```
+
+`Δt` es el tiempo real transcurrido desde la acumulación anterior (así se adapta a la cadencia variable dirigida por eventos). Un hueco mayor a 10 s —que significa que las condiciones no se cumplieron de forma continua— se trata como un reinicio y no se contabiliza energía a través de él.
 
 Este acumulador se expone como el sensor **`Grid at Min SOC`** (kWh) y se resetea a medianoche.
 
