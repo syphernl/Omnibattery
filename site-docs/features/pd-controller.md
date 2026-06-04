@@ -20,10 +20,56 @@ Because the loop is event-driven (variable cadence), the `P` term and the rate l
 
 | Parameter | Value | Description |
 |---|---|---|
-| `Kp` | `0.65` | Proportional gain |
-| `Kd` | `0.5` | Derivative gain |
+| `Kp` | `0.35` | Proportional gain |
+| `Kd` | `0.3` | Derivative gain |
 | Deadband | `±40 W` | Dead zone: ignores small errors |
 | Rate limit | `±800 W/cycle` | Maximum change per cycle |
+
+!!! note "Lowered defaults"
+    `Kp`/`Kd` were lowered from `0.65`/`0.5` to `0.35`/`0.3` to curb overshoot under the event-driven loop. Installs still on the old defaults are migrated automatically; hand-tuned values are left untouched.
+
+## Tuning profiles
+
+Instead of tuning the gains by hand, pick a **tuning profile** (`select.*_pd_tuning_profile`) — a one-click preset that sets `Kp`, `Kd` and the rate limit together. Profiles are ordered smoothest → fastest:
+
+| Profile | Kp | Kd | Rate limit | Use when |
+|---|---|---|---|---|
+| Very smooth | 0.22 | 0.15 | 400 W | Noisy meter, want zero hunting; calm but slow |
+| Smooth | 0.30 | 0.25 | 600 W | Conservative |
+| Balanced | 0.35 | 0.30 | 800 W | Default — works for most installs |
+| Aggressive | 0.55 | 0.45 | 1200 W | Clean meter, want a fast response |
+| Custom | — | — | — | Manual: tune the sliders yourself |
+
+- Selecting a profile writes its three gains and hot-reloads them (no restart).
+- Moving any of those three sliders by hand switches the profile to **Custom** automatically; your value is kept.
+- **Deadband is not part of the profiles.** It is your precision / meter-noise preference *and* the reference the control-quality sensor measures against, so it stays a separate slider you own. Changing it does not change the active profile.
+
+In the dashboard, the profile selector and the quality sensor sit at the top of the **PD controller** section of the Control tab.
+
+## Control quality sensor
+
+`sensor.marstek_venus_system_pd_control_quality` shows, at a glance, how well the PD is holding the grid target — so you can see the effect of a profile/slider change instead of guessing.
+
+The **state is a verdict**, not a number:
+
+| State | Meaning | What to do |
+|---|---|---|
+| Stable | PD tracks the target well | Nothing |
+| Oscillating | Hunting (frequent charge↔discharge) | Use a smoother profile, or raise the deadband |
+| Sluggish | Too slow to catch up | Use a more aggressive profile |
+| Battery limited | Battery full/empty or at its power rail — the PD cannot act | Not a tuning issue |
+| Collecting data | Warming up (just started) | Wait |
+
+The attributes carry the raw figures: `rms_error_w` (average grid-tracking error), `oscillation_per_min`, the active gains, and `active_profile`.
+
+**How to tune:**
+
+1. Watch the verdict (and `rms_error_w`).
+2. `Oscillating` → step down a profile (Aggressive → Balanced → Smooth). `Sluggish` → step up.
+3. Wait **1–2 minutes** — the metric is a 60 s rolling average, so it lags a change.
+4. Repeat until `Stable`.
+
+The metric is robust against false readings: it pauses briefly after any target change (hourly net balance, capacity protection, a manual target change…) and while the battery is limited, so neither inflates the reading.
 
 ## Control cadence
 
