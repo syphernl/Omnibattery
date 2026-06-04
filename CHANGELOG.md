@@ -2,7 +2,7 @@
 
 ## [2.0.1b1] - 2026-06-04
 
-> **Note:** This release changes the dashboard panel. After updating, hard-refresh the browser (**Ctrl+F5**, or Cmd+Shift+R on macOS) to load the new version — a cached panel may otherwise persist.
+> **Note:** This release contains changes for the dashboard panel. After updating, hard-refresh the browser (**Ctrl+F5**, or Cmd+Shift+R on macOS) to load the new version — a cached panel may otherwise persist.
 
 ### Added
 - **Control tab help tooltips**: Each Control-tab section header (ⓘ button) and slider/switch (dotted label) now shows its options-flow explanation on hover and tap. [`marstek-panel.js`](custom_components/marstek_venus_energy_manager/frontend/marstek-panel.js).
