@@ -2050,13 +2050,13 @@ DEFAULT_PD_TUNING_PROFILE = PD_PROFILE_CUSTOM
 
 PD_TUNING_PROFILES = {
     "very_smooth": {
-        CONF_PD_KP: 0.30,
+        CONF_PD_KP: 0.22,
         CONF_PD_KD: 0.15,
         CONF_PD_DEADBAND: 100,
         CONF_PD_MAX_POWER_CHANGE: 400,
     },
     "smooth": {
-        CONF_PD_KP: 0.45,
+        CONF_PD_KP: 0.30,
         CONF_PD_KD: 0.25,
         CONF_PD_DEADBAND: 70,
         CONF_PD_MAX_POWER_CHANGE: 600,
@@ -2068,8 +2068,8 @@ PD_TUNING_PROFILES = {
         CONF_PD_MAX_POWER_CHANGE: DEFAULT_PD_MAX_POWER_CHANGE,
     },
     "aggressive": {
-        CONF_PD_KP: 1.00,
-        CONF_PD_KD: 0.65,
+        CONF_PD_KP: 0.55,
+        CONF_PD_KD: 0.45,
         CONF_PD_DEADBAND: 25,
         CONF_PD_MAX_POWER_CHANGE: 1200,
     },
