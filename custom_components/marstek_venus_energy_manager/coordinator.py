@@ -736,6 +736,7 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
             if None in [discharge_reg, charge_reg, force_reg, battery_power_reg]:
                 if not self._is_shutting_down:
                     _LOGGER.error("[%s] Missing required registers for atomic power write", self.name)
+                self._last_write_failure_reason = "missing_registers"
                 return None
 
             inter_write_delay = MESSAGE_WAIT_MS.get(self.battery_version, 50) / 1000.0
@@ -754,6 +755,7 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
                             "[%s] Atomic power write partial failure: discharge=%s, charge=%s, force=%s",
                             self.name, ok1, ok2, ok3
                         )
+                    self._last_write_failure_reason = "modbus_write_failed"
                     return None
 
                 # Wait for battery to process commands
@@ -769,6 +771,8 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
                 if None in (force_fb, charge_fb, discharge_fb, power_fb):
                     if not self._is_shutting_down:
                         _LOGGER.warning("[%s] Atomic power feedback read failed", self.name)
+                    # Writes were accepted but the readback never followed.
+                    self._last_write_failure_reason = "feedback_timeout"
                     return None
 
                 # Update coordinator.data with fresh values
@@ -781,6 +785,7 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
                 # Successful write+read confirms healthy connection
                 self._consecutive_failures = 0
                 self._is_connected = True
+                self._last_write_failure_reason = None
 
                 return {
                     "force_mode": force_fb,
@@ -791,4 +796,5 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
             except Exception as e:
                 if not self._is_shutting_down:
                     _LOGGER.warning("[%s] Atomic power write failed: %s", self.name, e)
+                self._last_write_failure_reason = "modbus_exception"
                 return None

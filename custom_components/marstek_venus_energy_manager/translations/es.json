@@ -1282,6 +1282,9 @@
       "pd_relay_cooldown": {
         "name": "PD Tiempo Mínimo de Relé"
       },
+      "pd_min_cycle_interval": {
+        "name": "PD Intervalo Mínimo de Ciclo"
+      },
       "pd_target_grid_power": {
         "name": "PD Potencia Objetivo Red"
       },

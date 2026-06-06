@@ -66,6 +66,8 @@ from .const import (
     CONF_PD_RELAY_COOLDOWN,
     DEFAULT_PD_RELAY_COOLDOWN,
     RELAY_COOLDOWN_HOLD_POWER,
+    CONF_PD_MIN_CYCLE_INTERVAL,
+    DEFAULT_PD_MIN_CYCLE_INTERVAL,
     CONF_TARGET_GRID_POWER,
     DEFAULT_TARGET_GRID_POWER,
     CONF_ENABLE_SYSTEM_POWER_LIMITS,
@@ -315,6 +317,10 @@ class ChargeDischargeController:
         # battery transitions idle->active; the dwell blocks the active->idle return.
         self._relay_cooldown_s = config_entry.data.get(CONF_PD_RELAY_COOLDOWN, DEFAULT_PD_RELAY_COOLDOWN)
         self._relay_engage_since = None
+        # Event-driven cycle rate limit: drop grid-sensor triggers that arrive
+        # closer together than this, so fast meters can't flood the Modbus bridge.
+        self._min_cycle_interval_s = config_entry.data.get(CONF_PD_MIN_CYCLE_INTERVAL, DEFAULT_PD_MIN_CYCLE_INTERVAL)
+        self._last_cycle_monotonic = 0.0
         self.target_grid_power = config_entry.data.get(CONF_TARGET_GRID_POWER, DEFAULT_TARGET_GRID_POWER)
         self.enable_system_power_limits = config_entry.data.get(
             CONF_ENABLE_SYSTEM_POWER_LIMITS,
@@ -1341,6 +1347,7 @@ class ChargeDischargeController:
         self.min_charge_power = self.config_entry.data.get(CONF_PD_MIN_CHARGE_POWER, DEFAULT_PD_MIN_CHARGE_POWER)
         self.min_discharge_power = self.config_entry.data.get(CONF_PD_MIN_DISCHARGE_POWER, DEFAULT_PD_MIN_DISCHARGE_POWER)
         self._relay_cooldown_s = self.config_entry.data.get(CONF_PD_RELAY_COOLDOWN, DEFAULT_PD_RELAY_COOLDOWN)
+        self._min_cycle_interval_s = self.config_entry.data.get(CONF_PD_MIN_CYCLE_INTERVAL, DEFAULT_PD_MIN_CYCLE_INTERVAL)
         self.target_grid_power = self.config_entry.data.get(CONF_TARGET_GRID_POWER, DEFAULT_TARGET_GRID_POWER)
         self.enable_system_power_limits = self.config_entry.data.get(
             CONF_ENABLE_SYSTEM_POWER_LIMITS,
@@ -4080,17 +4087,23 @@ class ChargeDischargeController:
         else:
             expected_force_mode = 0  # None
 
-        # Attempt atomic write + verify, with one retry on failure
+        # Attempt atomic write + verify, with one retry on failure.
+        # last_fail_reason carries the most specific failure category seen across
+        # both attempts so the non-responsive tracker can surface *why*.
+        last_fail_reason: str | None = None
         for attempt in range(2):
             feedback = await coordinator.write_power_atomic(
                 int(discharge_power), int(charge_power), expected_force_mode
             )
 
             if feedback is None:
+                last_fail_reason = getattr(
+                    coordinator, "_last_write_failure_reason", None
+                ) or "comm_failure"
                 if not coordinator._is_shutting_down:
                     _LOGGER.warning(
-                        "[%s] Power write/feedback failed (attempt %d/2)",
-                        coordinator.name, attempt + 1
+                        "[%s] Power write/feedback failed (attempt %d/2, reason=%s)",
+                        coordinator.name, attempt + 1, last_fail_reason
                     )
                 continue
 
@@ -4147,12 +4160,35 @@ class ChargeDischargeController:
                                 "low-SOC cutoff range (min_soc=%d%%, floor=%d%%) — not a fault",
                                 coordinator.name, current_soc, coordinator.min_soc, bms_cutoff_floor,
                             )
+                            # Comms and battery are fine, just protecting itself.
+                            self._non_responsive.clear(coordinator)
                         else:
-                            self._non_responsive.record_non_delivery(coordinator, discharge_power, actual_abs)
+                            # ACK'd but no power: separate a battery sitting in standby
+                            # (likely dropped RS485 control) from one that is awake but
+                            # still refusing.
+                            inv_state = coordinator.data.get("inverter_state") if coordinator.data else None
+                            try:
+                                is_standby = (
+                                    inv_state is not None
+                                    and int(inv_state) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
+                                )
+                            except (TypeError, ValueError):
+                                is_standby = False
+                            reason = "standby_no_delivery" if is_standby else "non_delivery"
+                            just_excluded = self._non_responsive.record_non_delivery(
+                                coordinator, discharge_power, actual_abs,
+                                reason=reason, retry_attempted=attempt > 0,
+                            )
+                            # One-shot wake nudge, only at the moment of exclusion —
+                            # a last-ditch RS485 re-assert before dropping it from the pool.
+                            if just_excluded:
+                                woke = await self._attempt_wake(coordinator)
+                                self._non_responsive.set_wake_attempted(coordinator, woke)
                     else:
                         self._non_responsive.clear(coordinator)
                 return True
 
+            last_fail_reason = "ack_mismatch"
             if attempt == 0:
                 _LOGGER.warning(
                     "[%s] Power command not ACK'd (attempt 1/2), retrying. "
@@ -4168,13 +4204,42 @@ class ChargeDischargeController:
                     feedback["battery_power"],
                 )
 
+        # Both attempts failed at the Modbus/ACK level — feed the tracker so the
+        # diagnostic sensor can report the specific reason (and so repeated comms
+        # failures eventually exclude the battery, same as non-delivery).
         if not coordinator._is_shutting_down:
+            self._non_responsive.record_comm_failure(
+                coordinator, last_fail_reason or "comm_failure"
+            )
             _LOGGER.error(
-                "[%s] Power command failed after 2 attempts. "
+                "[%s] Power command failed after 2 attempts (reason=%s). "
                 "Battery may not have received command.",
-                coordinator.name
+                coordinator.name, last_fail_reason or "comm_failure"
             )
         return False
+
+    async def _attempt_wake(self, coordinator) -> bool:
+        """Toggle RS485 control off→on as a wake nudge for an unresponsive battery.
+
+        A battery that ACKs power commands but delivers 0 W has usually dropped its
+        RS485 control mode (e.g. it slipped into standby). Simply re-asserting the
+        enable value is a no-op if the battery already believes it is enabled, so we
+        force a real state transition: disable (0x55BB), wait 1 s, then re-enable
+        (0x55AA). Skipped when the user has disabled RS485 control. Returns True if
+        the re-enable write succeeded.
+        """
+        if coordinator.rs485_user_disabled:
+            return False
+        rs485_reg = coordinator.get_register("rs485_control")
+        if not rs485_reg:
+            return False
+        _LOGGER.info(
+            "[%s] Non-delivery — RS485 wake toggle (disable 0x55BB → 1s → enable 0x55AA)",
+            coordinator.name,
+        )
+        await coordinator.write_register(rs485_reg, 21947, do_refresh=False)  # 0x55BB disable
+        await asyncio.sleep(1)
+        return await coordinator.write_register(rs485_reg, 21930, do_refresh=False)  # 0x55AA enable
 
     def _calculate_excluded_devices_adjustment(self, current_grid_power: float) -> float:
         """Calculate power adjustment for excluded devices.
@@ -5883,11 +5948,27 @@ class ChargeDischargeController:
         trigger is skipped: the in-flight cycle already reads the current state,
         so re-entering would only risk concurrent Modbus writes.
         """
+        # Event-driven rate limit: drop a consumption-sensor trigger that lands
+        # within _min_cycle_interval_s of the last cycle, so a fast-publishing
+        # meter can't flood slow Modbus bridges (e.g. Elfin EW11) with write
+        # bursts. The periodic safety timer (now is a datetime) is never gated:
+        # it keeps the time-based subsystems running and forces a recalc within
+        # its own period. 0 = disabled.
+        if now is None and self._min_cycle_interval_s > 0:
+            elapsed = time.monotonic() - self._last_cycle_monotonic
+            if elapsed < self._min_cycle_interval_s:
+                if DEBUG_CONTROL_LOOP_DETAIL:
+                    _LOGGER.debug(
+                        "Event trigger throttled: %.2fs since last cycle < %.2fs min interval",
+                        elapsed, self._min_cycle_interval_s,
+                    )
+                return
         if self._control_lock.locked():
             if DEBUG_CONTROL_LOOP_DETAIL:
                 _LOGGER.debug("Control cycle already running; skipping overlapping trigger.")
             return
         async with self._control_lock:
+            self._last_cycle_monotonic = time.monotonic()
             await self._run_control_cycle(now)
 
     async def _run_control_cycle(self, now=None):
@@ -6489,13 +6570,16 @@ class ChargeDischargeController:
         # transition is gated; charge<->discharge flips keep the relay engaged anyway.
         # A large imbalance bypasses the hold (cost-capped: we only hold while the
         # over/under-shoot stays small, ~3x deadband), so a sudden real load isn't
-        # left on the grid.
+        # left on the grid. The cap measures imbalance BEYOND the power the battery was
+        # already handling: at shut-off the grid swings by ~previous_power (the battery's
+        # own delivery now reads as grid export/import), so comparing raw error would
+        # trip the cap on every shut-off above ~3x deadband and skip the hold entirely.
         if (
             self._relay_cooldown_s > 0
             and new_power == 0
             and self.previous_power != 0
             and self._relay_engage_since is not None
-            and abs(error) < max(self.deadband * 3, RELAY_COOLDOWN_HOLD_POWER)
+            and abs(error) - abs(self.previous_power) < max(self.deadband * 3, RELAY_COOLDOWN_HOLD_POWER)
         ):
             held_s = (dt_util.utcnow() - self._relay_engage_since).total_seconds()
             if 0 <= held_s < self._relay_cooldown_s:
@@ -7033,13 +7117,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             connected = await coordinator.connect()
             if not connected:
-                # V3 batteries accept only one TCP connection; the slot from unload
-                # may not be released yet. Retry once after a brief delay.
-                _LOGGER.warning("Initial connection to %s failed, retrying in 1s...", coordinator.host)
-                await asyncio.sleep(1.0)
-                connected = await coordinator.connect()
+                # V3 batteries / Modbus bridges (e.g. EW11B) accept only one TCP
+                # connection; the slot from the previous session may not be released
+                # yet on restart. Retry with escalating delays before giving up.
+                for _delay in (2.0, 5.0, 10.0):
+                    _LOGGER.warning(
+                        "Initial connection to %s failed, retrying in %.0fs...",
+                        coordinator.host, _delay,
+                    )
+                    await asyncio.sleep(_delay)
+                    connected = await coordinator.connect()
+                    if connected:
+                        break
             if not connected:
-                _LOGGER.warning("Initial connection to %s failed. The integration will keep trying.", coordinator.host)
+                # Don't silently continue with an unconnected coordinator (entities
+                # would be unavailable and HA would think setup succeeded). Raise
+                # ConfigEntryNotReady so HA retries setup with backoff.
+                raise ConfigEntryNotReady(
+                    f"Could not connect to {coordinator.host}:{coordinator.port} — "
+                    "the device may still be releasing the previous TCP connection slot. "
+                    "HA will retry setup automatically."
+                )
             else:
                 # Enable RS485 Control Mode first (required to apply configuration changes)
                 # Only done during integration setup/reload, not repeated during runtime

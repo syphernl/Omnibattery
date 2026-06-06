@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.1b4] - 2026-06-05
+
+### Added
+- **Non-responsive reason on the diagnostic sensor**: the Non-Responsive Batteries sensor now reports *why* a battery is flagged — `modbus_write_failed`/`modbus_exception` (write failed), `feedback_timeout` (write accepted, readback never followed), `ack_mismatch`, `standby_no_delivery` (inverter in standby) or `non_delivery` — plus `retry_attempted`/`wake_attempted` flags. Modbus/ACK failures now also count toward exclusion, not just non-delivery. [`coordinator.py`](custom_components/marstek_venus_energy_manager/coordinator.py), [`non_responsive_tracker.py`](custom_components/marstek_venus_energy_manager/non_responsive_tracker.py), [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py), [`sensor.py`](custom_components/marstek_venus_energy_manager/sensor.py).
+- **RS485 wake nudge before excluding**: when a battery that ACKs but delivers 0 W is about to be marked non-responsive (final consecutive fail), RS485 control is toggled once — disable (0x55BB), wait 1 s, re-enable (0x55AA) — as a last-ditch attempt to force it out of standby. The toggle (not a plain re-assert) is needed so the battery actually clears its state. One shot per exclusion, not per cycle. Skipped when RS485 control is user-disabled. [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py).
+- **PD Min Cycle Interval**: New `number.*_pd_min_cycle_interval` (s, default `0` = disabled, opt-in). Caps how often the event-driven control loop runs — grid-sensor updates arriving closer together than this are dropped, so a fast-publishing meter can't flood slow Modbus bridges (e.g. Elfin EW11) with write bursts. The 2 s safety timer is never gated, so control never stalls. [`const.py`](custom_components/marstek_venus_energy_manager/const.py), [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py).
+
+### Fixed
+- **Needed multiple reboots on startup**: if the first connect failed (e.g. EW11B hadn't released the previous TCP slot), setup logged a warning and continued with an unconnected coordinator — entities stayed unavailable but HA marked the integration loaded, forcing a second restart. Now retries with escalating delays (2/5/10 s) and raises `ConfigEntryNotReady` if still down so HA retries setup automatically. (#308) [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py).
+- **PD Relay Cooldown never held**: the bypass compared raw grid error against ~3× deadband, but at shut-off the grid swings by ~previous_power (the battery's own delivery reads as export/import), so any engaged power above that tripped the bypass and the relay dropped instantly. The cap now measures imbalance beyond the power the battery was already handling. [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py).
+
 ## [2.0.1b3] - 2026-06-04
 
 ### Added

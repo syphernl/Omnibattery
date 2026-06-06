@@ -2053,6 +2053,7 @@ CONF_PD_DIRECTION_HYSTERESIS = "pd_controller_direction_hysteresis"
 CONF_PD_MIN_CHARGE_POWER = "pd_min_charge_power"
 CONF_PD_MIN_DISCHARGE_POWER = "pd_min_discharge_power"
 CONF_PD_RELAY_COOLDOWN = "pd_relay_cooldown"
+CONF_PD_MIN_CYCLE_INTERVAL = "pd_min_cycle_interval"
 CONF_TARGET_GRID_POWER = "pd_target_grid_power"
 CONF_ENABLE_SYSTEM_POWER_LIMITS = "enable_system_power_limits"
 CONF_SYSTEM_MAX_CHARGE_POWER = "system_max_charge_power"
@@ -2077,6 +2078,12 @@ DEFAULT_PD_RELAY_COOLDOWN = 0
 # Power held in the already-engaged direction while the cooldown is running, when
 # the user's min charge/discharge power is 0 (otherwise that min is used).
 RELAY_COOLDOWN_HOLD_POWER = 100
+# Minimum spacing (s) between event-driven control cycles. The grid sensor can
+# publish several times per second; without a floor, each out-of-deadband cycle
+# issues a Modbus write burst, which slow TCP-serial bridges (e.g. Elfin EW11)
+# can choke on. Drops surplus sensor-triggered cycles; the 2 s safety timer is
+# never gated. 0 = disabled (default: pre-feature behaviour, opt-in via slider).
+DEFAULT_PD_MIN_CYCLE_INTERVAL = 0.0
 DEFAULT_TARGET_GRID_POWER = 0
 DEFAULT_ENABLE_SYSTEM_POWER_LIMITS = False
 DEFAULT_SYSTEM_MAX_CHARGE_POWER = 0       # 0 = disabled
@@ -2255,6 +2262,16 @@ CONFIG_NUMBER_DEFINITIONS = [
         "unit": "s",
         "default": DEFAULT_PD_RELAY_COOLDOWN,
         "icon": "mdi:timer-cog-outline",
+    },
+    {
+        "key": CONF_PD_MIN_CYCLE_INTERVAL,
+        "name": "PD Min Cycle Interval",
+        "min": 0,
+        "max": 2,
+        "step": 0.1,
+        "unit": "s",
+        "default": DEFAULT_PD_MIN_CYCLE_INTERVAL,
+        "icon": "mdi:timer-pause-outline",
     },
     {
         "key": CONF_TARGET_GRID_POWER,

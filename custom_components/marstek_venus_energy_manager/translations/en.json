@@ -1269,6 +1269,9 @@
       "pd_relay_cooldown": {
         "name": "PD Relay Cooldown"
       },
+      "pd_min_cycle_interval": {
+        "name": "PD Min Cycle Interval"
+      },
       "pd_target_grid_power": {
         "name": "PD Target Grid Power"
       },

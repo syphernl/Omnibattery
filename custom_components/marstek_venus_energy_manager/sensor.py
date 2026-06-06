@@ -1216,7 +1216,9 @@ class NonResponsiveBatteriesSensor(SensorEntity):
                 attrs[coordinator.name] = {
                     "excluded": True,
                     "unreachable": unreachable,
-                    "reason": "non_delivery",
+                    "reason": info.get("reason") or "non_delivery",
+                    "retry_attempted": info.get("retry_attempted", False),
+                    "wake_attempted": info.get("wake_attempted", False),
                     "cooldown_minutes": info["cooldown_minutes"],
                     "remaining_minutes": round(remaining_min, 1),
                     "consecutive_failures": getattr(coordinator, "_consecutive_failures", 0),
@@ -1225,7 +1227,9 @@ class NonResponsiveBatteriesSensor(SensorEntity):
                 attrs[coordinator.name] = {
                     "excluded": unreachable,
                     "unreachable": unreachable,
-                    "reason": "connection_unavailable" if unreachable else None,
+                    "reason": "connection_unavailable" if unreachable else (info.get("reason") if info else None),
+                    "retry_attempted": info.get("retry_attempted", False) if info else False,
+                    "wake_attempted": info.get("wake_attempted", False) if info else False,
                     "fail_count": info["fail_count"] if info else 0,
                     "consecutive_failures": getattr(coordinator, "_consecutive_failures", 0),
                 }
