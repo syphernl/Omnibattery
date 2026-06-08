@@ -7,6 +7,9 @@
 - **Contracted power now caps grid import in every mode**: previously it only applied while predictive grid charging. The PD loop now clamps battery charging so projected grid import never exceeds the contracted power — a positive target/offset (user setpoint or hourly net balance) can no longer push the breaker past its limit. Charging only; never forces a discharge. [`__init__.py`](custom_components/marstek_venus_energy_manager/__init__.py).
 - **Min/Max Cell Voltage polled at high priority**: scan interval raised from `medium` to `high` for all batteries. [`const.py`](custom_components/marstek_venus_energy_manager/const.py).
 
+### Fixed
+- **Active balance retry now ratchets down to 3.40 V**: a BMS charge rejection below 3.58 V lowered the retry voltage but reset it to default after every escape discharge, so it never stepped down and the run ping-ponged at 3.49 V. The lowered retry now persists across cycles, dropping 0.01 V per rejection to the 3.40 V floor; it resets only on reaching 3.58 V or finishing. A cell delta measurement is now also recorded at the cut, so a run that never reaches 3.58 V no longer logs no reading. [`active_balance_mode.py`](custom_components/marstek_venus_energy_manager/active_balance_mode.py).
+
 ## [2.0.1b4] - 2026-06-05
 
 ### Added

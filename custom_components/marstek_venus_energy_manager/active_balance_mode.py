@@ -200,14 +200,18 @@ class ActiveBalanceModeManager:
         self,
         coordinator,
         details: dict,
+        source: str = "measurement_3.58V",
     ) -> None:
-        """Store the latest 3.58 V balance measurement for result notifications."""
+        """Store the latest balance measurement for result notifications.
+
+        ``source`` distinguishes a normal 3.58 V top measurement from one taken
+        when the BMS cut charge before reaching the 3.58 V stop voltage.
+        """
         final_delta = details.get("delta_V")
         if final_delta is None:
             return
         data = coordinator.data or {}
         cutoff_ts = dt_util.now().isoformat()
-        source = "measurement_3.58V"
         coordinator.active_balance_mode_last_cutoff_ts = cutoff_ts
         coordinator.active_balance_mode_last_cutoff_delta_v = final_delta
         coordinator.active_balance_mode_last_cutoff_delta_mv = final_delta
@@ -867,6 +871,19 @@ class ActiveBalanceModeManager:
             # end-of-charge signal and must transition us into WAIT_MEASURE,
             # not into DISCHARGE (which would skip the delta evaluation).
             if charge_rejected and vmax_f < ACTIVE_BALANCE_CHARGE_STOP_CELL_VOLTAGE:
+                # BMS cut charge before the 3.58 V top. Rejection detection
+                # requires ~0 W, so cells are already at rest: record the
+                # achieved delta as a real measurement before stepping the retry
+                # point down and dropping into the escape discharge.
+                await self._record_active_balance_mode_measurement(
+                    coordinator,
+                    {
+                        "delta_V": delta_v,
+                        "max_cell_voltage": round(vmax_f, 3),
+                        "min_cell_voltage": round(vmin_f, 3),
+                    },
+                    source="bms_cut_below_stop",
+                )
                 retry_voltage = self._lower_active_balance_charge_resume_target(coordinator, vmax_f)
                 coordinator.active_balance_mode_retry_voltage = retry_voltage
                 phase = "DISCHARGE"
@@ -875,6 +892,10 @@ class ActiveBalanceModeManager:
                 if vmax_f >= ACTIVE_BALANCE_CHARGE_STOP_CELL_VOLTAGE:
                     phase = "WAIT_MEASURE"
                     coordinator.active_balance_mode_wait_started_ts = now.isoformat()
+                    # Reached the 3.58 V top: clear any ratcheted-down retry so
+                    # the next run-up starts from the default resume voltage.
+                    coordinator.active_balance_mode_retry_voltage = None
+                    self._reset_active_balance_charge_resume_target(coordinator)
                 else:
                     charge_power = ACTIVE_BALANCE_CHARGE_POWER_W
             elif phase == "WAIT_MEASURE":
@@ -906,9 +927,11 @@ class ActiveBalanceModeManager:
                 if vmax_f > target_voltage:
                     discharge_power = ACTIVE_BALANCE_DISCHARGE_POWER_W
                 else:
+                    # Keep the ratcheted-down retry voltage so a repeated BMS
+                    # rejection steps it lower on the next charge attempt (down
+                    # to the 3.40 V floor). It is reset only when the 3.58 V top
+                    # is reached (WAIT_MEASURE) or the run completes.
                     phase = "CHARGE"
-                    coordinator.active_balance_mode_retry_voltage = None
-                    self._reset_active_balance_charge_resume_target(coordinator)
                     charge_power = ACTIVE_BALANCE_CHARGE_POWER_W
             elif phase == "FINAL_DISCHARGE":
                 if vmax_f > ACTIVE_BALANCE_FINAL_DISCHARGE_STOP_CELL_VOLTAGE:
