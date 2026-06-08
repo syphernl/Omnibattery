@@ -7256,10 +7256,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if controller._solar_t_start is None:
         await consumption_tracker.load_solar_t_start()
 
-    # Set up periodic timers and store unsub callbacks for manual cancellation during unload
-    unsub_control = async_track_time_interval(
+    # Set up periodic timers and store unsub callbacks for manual cancellation during unload.
+    # Each unsub is registered twice: stored in hass.data so async_unload_entry can cancel
+    # the timers early (before platform teardown), and via entry.async_on_unload so HA cleans
+    # up on setup failure. The state-change tracker's unsub raises on a second call
+    # (list.remove(x): x not in list), so wrap every unsub to be call-once.
+    def _call_once(unsub):
+        done = False
+
+        def _wrapped():
+            nonlocal done
+            if not done:
+                done = True
+                unsub()
+
+        return _wrapped
+
+    unsub_control = _call_once(async_track_time_interval(
         hass, controller.async_update_charge_discharge, timedelta(seconds=2.0)
-    )
+    ))
     entry.async_on_unload(unsub_control)
 
     # Force coordinator updates every 1.5 seconds with timestamp-based per-sensor polling
@@ -7270,9 +7285,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _LOGGER.debug("Setting up periodic refresh for all coordinators")
 
-    unsub_refresh = async_track_time_interval(
+    unsub_refresh = _call_once(async_track_time_interval(
         hass, _force_coordinator_refresh, timedelta(seconds=1.5)
-    )
+    ))
     entry.async_on_unload(unsub_refresh)
 
     # Event-driven control: also run the control cycle the instant the grid
@@ -7285,9 +7300,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Do not forward the Event as `now`; the handler expects datetime|None.
         await controller.async_update_charge_discharge()
 
-    unsub_consumption = async_track_state_change_event(
+    unsub_consumption = _call_once(async_track_state_change_event(
         hass, [controller.consumption_sensor], _on_consumption_changed
-    )
+    ))
     entry.async_on_unload(unsub_consumption)
 
     # Set up hourly balance manager if enabled
