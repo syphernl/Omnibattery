@@ -239,6 +239,11 @@ class MarstekVenusAggregateSensor(SensorEntity):
     
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from any coordinator."""
+        # The listener is registered in __init__, so it also fires for a
+        # disabled entity (never added to hass). Writing state then raises
+        # RuntimeError and breaks the coordinator's listener-notify loop.
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @property
@@ -507,6 +512,10 @@ class SystemAlarmSensor(SensorEntity):
             coordinator.async_add_listener(self._handle_coordinator_update)
 
     def _handle_coordinator_update(self) -> None:
+        # See MarstekVenusAggregateSensor: guard the disabled-entity case where
+        # hass is None to avoid breaking the coordinator listener-notify loop.
+        if self.hass is None:
+            return
         self.async_write_ha_state()
 
     @staticmethod
