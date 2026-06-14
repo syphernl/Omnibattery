@@ -189,6 +189,14 @@ NORMAL_BALANCE_RECAL_INVERTER_STANDBY = 1      # inverter_state raw value for St
 # fault, so the battery stays in the PD pool.
 BMS_DISCHARGE_CUTOFF_SOC = 20                  # %: below this, refused discharge = BMS cutoff, not a fault
 
+# Bus-load reduction: the PD loop normally reads 4 registers back after every
+# power write (ACK verify + non-delivery detection). Those reads are the bulk of
+# the write-path traffic. To cut bus load, only read back every Nth *real* write
+# (option-B skips don't count); the others are write-only (no readback, no
+# post-write settle delay). Trade-off: ACK mismatches and a battery that stops
+# delivering are caught up to N writes later instead of immediately.
+PD_READBACK_EVERY_N_WRITES = 5
+
 # Active balance mode.
 # Once the battery has reached the top, keep the cells in the balancing window
 # with gentle charge/discharge micro-cycles instead of only resting at 100% SOC.
