@@ -16,7 +16,6 @@ from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.event import async_track_time_interval, async_track_time_change, async_track_state_change_event
-from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from pymodbus.exceptions import ConnectionException
@@ -125,6 +124,7 @@ from .const import (
     DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
     DEBUG_CONTROL_LOOP_DETAIL,
 )
+from .charge_delay import ChargeDelayManager
 from .coordinator import MarstekVenusDataUpdateCoordinator
 from .hourly_balance import HourlyBalanceManager
 from .non_responsive_tracker import NonResponsiveTracker
@@ -572,10 +572,7 @@ class ChargeDischargeController:
         self._predictive_grid_charge_margin_pct: float = config_entry.data.get(CONF_PREDICTIVE_GRID_CHARGE_MARGIN_PCT, DEFAULT_PREDICTIVE_GRID_CHARGE_MARGIN_PCT)
         self._charge_delay_unlocked = False       # True when delay has been unlocked today
         self._delay_setpoint_reached = False      # True once SOC first reached the setpoint
-        self._charge_delay_store: Store = Store(
-            hass, 1, f"{DOMAIN}.{config_entry.entry_id}.charge_delay_state"
-        )
-        self._charge_delay_save_task: asyncio.Task | None = None
+        self._charge_delay_mgr = ChargeDelayManager(hass, config_entry, self)
         self._balance_monitor = None  # Set from async_setup_entry after monitor is created
 
         # Hourly Net Balance
@@ -651,61 +648,9 @@ class ChargeDischargeController:
         _LOGGER.info("Hourly Net Balance: %s",
                      "ENABLED" if self.hourly_balance_enabled else "DISABLED")
 
-    async def load_charge_delay_state(self) -> None:
-        """Restore same-day charge delay latch state from storage."""
-        if not self.charge_delay_enabled:
-            return
-
-        try:
-            data = await self._charge_delay_store.async_load()
-            if not data:
-                return
-
-            today_iso = dt_util.now().date().isoformat()
-            if data.get("date") != today_iso:
-                return
-
-            self._charge_delay_unlocked = data.get("delay_unlocked", False)
-            self._delay_setpoint_reached = data.get("delay_setpoint_reached", False)
-            if data.get("solar_t_start") is not None:
-                self._solar_t_start = data.get("solar_t_start")
-
-            _LOGGER.info(
-                "Charge Delay: restored state - unlocked=%s, setpoint_reached=%s",
-                self._charge_delay_unlocked,
-                self._delay_setpoint_reached,
-            )
-        except Exception as exc:
-            _LOGGER.error("Charge Delay: failed to load persisted state: %s", exc)
-
     def _schedule_charge_delay_state_save(self) -> None:
-        """Persist charge delay latch state without blocking the control loop."""
-        if not self.charge_delay_enabled:
-            return
-
-        if self._charge_delay_save_task and not self._charge_delay_save_task.done():
-            self._charge_delay_save_task.cancel()
-        self._charge_delay_save_task = asyncio.create_task(
-            self._deferred_save_charge_delay_state()
-        )
-
-    async def _deferred_save_charge_delay_state(self) -> None:
-        """Let the current control-cycle state settle before saving."""
-        await asyncio.sleep(0)
-        await self._save_charge_delay_state()
-
-    async def _save_charge_delay_state(self) -> None:
-        """Save charge delay latch state to persistent storage."""
-        try:
-            await self._charge_delay_store.async_save({
-                "date": dt_util.now().date().isoformat(),
-                "delay_unlocked": self._charge_delay_unlocked,
-                "delay_setpoint_reached": self._delay_setpoint_reached,
-                "solar_t_start": self._solar_t_start,
-                "timestamp": dt_util.now().isoformat(),
-            })
-        except Exception as exc:
-            _LOGGER.error("Charge Delay: failed to save persisted state: %s", exc)
+        """Persist charge delay latch state (delegates to ChargeDelayManager)."""
+        self._charge_delay_mgr.schedule_save()
 
     def _configured_system_limit(self, is_charging: bool) -> int:
         """Return the optional system-wide power limit for the direction.
@@ -2081,7 +2026,7 @@ class ChargeDischargeController:
         """Refresh all runtime operation blockers for the current control cycle."""
         if (
             self.charge_delay_enabled
-            and self._is_charge_delayed()
+            and self._charge_delay_mgr.is_charge_delayed()
             and not self._active_balance_overrides_delay()
         ):
             self.set_charge_block(
@@ -2656,380 +2601,6 @@ class ChargeDischargeController:
             / len(coordinators_with_data)
         )
         return avg_soc < self.capacity_protection_soc_threshold
-
-    def _is_charge_delayed(self) -> bool:
-        """Unified gate: check if charging should be delayed based on solar forecast.
-
-        Returns True if charging should be blocked, False if allowed.
-        Called from _is_operation_allowed() for every charge attempt.
-        """
-        if not self.charge_delay_enabled:
-            self._charge_delay_status["state"] = "Disabled"
-            return False
-
-        # Skip delay entirely on the weekly full charge day when opted in
-        if self._balance_monitor_overrides_delay():
-            self._charge_delay_status["state"] = "Skipped - Full Charge Day"
-            return False
-
-        target_soc = self._consumption_tracker.get_today_target_soc()
-        self._charge_delay_status["target_soc"] = target_soc
-
-        # Already unlocked today?
-        if self._charge_delay_unlocked:
-            self._charge_delay_status["state"] = "Charging allowed"
-            return False
-
-        # SOC setpoint: delay only kicks in once all batteries reach the setpoint.
-        # Hysteresis prevents oscillation: once the setpoint is reached, charging
-        # only resumes if SOC drops DELAY_SOC_SETPOINT_HYSTERESIS % below it.
-        if self._delay_soc_setpoint_enabled:
-            min_soc = min(
-                (c.data.get("battery_soc", 100) for c in self.coordinators if c.data),
-                default=100,
-            )
-            if not self._delay_setpoint_reached:
-                if min_soc < self._delay_soc_setpoint:
-                    self._charge_delay_status["state"] = "Charging to setpoint"
-                    return False
-                self._delay_setpoint_reached = True
-                self._schedule_charge_delay_state_save()
-            else:
-                low_threshold = self._delay_soc_setpoint - DELAY_SOC_SETPOINT_HYSTERESIS
-                if min_soc < low_threshold:
-                    self._delay_setpoint_reached = False
-                    self._schedule_charge_delay_state_save()
-                    self._charge_delay_status["state"] = "Charging to setpoint"
-                    return False
-
-        # Evaluate delay conditions
-        if self._should_delay_charge(target_soc):
-            return True  # Keep delay active (block charging)
-
-        # Delay conditions no longer met - unlock permanently for today
-        self._charge_delay_unlocked = True
-        self._schedule_charge_delay_state_save()
-        _LOGGER.info("Charge Delay: Unlocked (target_soc=%d%%) - charging now allowed", target_soc)
-        # Persist unlock state if on weekly charge day
-        if self._weekly_charge_mgr.is_active():
-            asyncio.create_task(self._weekly_charge_mgr.save_state())
-        return False
-
-    def _should_delay_charge(self, target_soc: int) -> bool:
-        """Determine if charging should be delayed based on solar forecast.
-
-        Unified method for both daily (max_soc) and weekly (100%) charge delay.
-        Uses the live solar forecast sensor (updated throughout the day).
-
-        Returns True to keep delay active (block charging),
-        False to unlock charging.
-
-        Fail-safe: any failure → unlock (allow charging).
-
-        Decision flow:
-        1. No forecast sensor or unavailable → unlock immediately
-        2. Energy balance check: (usable_energy + forecast) < consumption → unlock (grid needed)
-           Recalculated only when forecast value changes (> 0.05 kWh).
-        3. No T_start detected and past fallback hour → unlock
-        4. Past T_end with no active production → unlock
-        5. Batteries already at target → unlock
-        6. Insufficient remaining solar energy → unlock
-        7. Insufficient time before T_end → unlock
-        8. Otherwise → keep delay active
-        """
-        from datetime import datetime
-        from time import monotonic
-
-        now = datetime.now()
-        now_h = now.hour + now.minute / 60.0
-        status = self._charge_delay_status
-        _h_to_hhmm = self._consumption_tracker.h_to_hhmm
-
-        def _unlock(reason):
-            """Set status and return False (unlock)."""
-            status["unlock_reason"] = reason
-            status["state"] = f"Unlocking ({reason})"
-            return False
-
-        # Update common status fields
-        status["solar_t_start"] = _h_to_hhmm(self._solar_t_start)
-
-        # --- Exception 1: No solar forecast sensor or unavailable ---
-        if not self.solar_forecast_sensor:
-            _LOGGER.info("Charge Delay: No solar forecast sensor configured - unlocking (reason: no_forecast)")
-            return _unlock("no_forecast")
-
-        # A configured forecast sensor can briefly read unavailable/unknown/invalid
-        # while it updates. Treating that transient blip as "no forecast" would
-        # commit a PERMANENT daily unlock (see _is_charge_delayed), so a momentary
-        # gap silently disables the delay for the rest of the day. Instead, hold the
-        # current delay through a short grace window and only unlock if the sensor
-        # stays unavailable. (A sensor that is not configured at all still unlocks
-        # immediately above — that is a deliberate fail-safe, not a transient.)
-        forecast_state = self.hass.states.get(self.solar_forecast_sensor)
-        raw_forecast = None
-        if forecast_state is not None and forecast_state.state not in ("unknown", "unavailable"):
-            try:
-                raw_forecast = float(forecast_state.state)
-            except (ValueError, TypeError):
-                raw_forecast = None
-
-        if raw_forecast is None:
-            mono = monotonic()
-            if self._forecast_unavailable_since is None:
-                self._forecast_unavailable_since = mono
-            unavailable_s = mono - self._forecast_unavailable_since
-            if unavailable_s < self._forecast_grace_s:
-                status["state"] = "Waiting for forecast"
-                _LOGGER.debug(
-                    "Charge Delay: forecast unavailable for %.0fs (< %ds grace) - holding delay",
-                    unavailable_s, self._forecast_grace_s,
-                )
-                return True  # keep the delay active; re-evaluate when the sensor recovers
-            _LOGGER.info(
-                "Charge Delay: Solar forecast unavailable for %.0fs (> grace) - unlocking (reason: no_forecast)",
-                unavailable_s,
-            )
-            return _unlock("no_forecast")
-
-        # Forecast recovered / valid — clear the transient tracker.
-        self._forecast_unavailable_since = None
-        forecast_today = raw_forecast * 0.85  # 15% conservative correction
-        status["forecast_kwh"] = raw_forecast
-
-        # --- Exception 2: Energy balance check (dynamic, recalculated only when forecast changes) ---
-        total_capacity_kwh = sum(
-            c.data.get("battery_total_energy", 0) for c in self.coordinators if c.data
-        )
-        if total_capacity_kwh <= 0:
-            _LOGGER.info("Charge Delay: Invalid battery capacity - unlocking")
-            return _unlock("no_forecast")
-
-        if (
-            self._charge_delay_forecast_cache is None
-            or abs(forecast_today - self._charge_delay_forecast_cache) > 0.05
-        ):
-            coordinators_with_data = [c for c in self.coordinators if c.data]
-            avg_soc = (
-                sum(c.data.get("battery_soc", 0) for c in coordinators_with_data)
-                / len(coordinators_with_data)
-            ) if coordinators_with_data else 0
-            min_soc_values = [c.min_soc for c in self.coordinators]
-            min_soc = max(min_soc_values) if min_soc_values else 20
-            usable_energy_kwh = max(0, ((avg_soc - min_soc) / 100) * total_capacity_kwh)
-            avg_consumption_kwh = self._consumption_tracker.get_avg_daily_consumption()
-            prev_cache = self._charge_delay_forecast_cache
-            self._charge_delay_balance_needs_charge = (
-                (usable_energy_kwh + forecast_today) < avg_consumption_kwh
-            )
-            self._charge_delay_forecast_cache = forecast_today
-            _LOGGER.info(
-                "Charge Delay: Forecast %s (%.2f → %.2f kWh) → "
-                "balance: %.2f usable + %.2f solar = %.2f kWh vs %.2f kWh consumption → %s",
-                "initialised" if prev_cache is None else "changed",
-                prev_cache if prev_cache is not None else 0.0, forecast_today,
-                usable_energy_kwh, forecast_today, usable_energy_kwh + forecast_today,
-                avg_consumption_kwh,
-                "grid needed (unlock delay)" if self._charge_delay_balance_needs_charge else "solar sufficient (keep delay)",
-            )
-
-        if self._charge_delay_balance_needs_charge:
-            return _unlock("low_forecast")
-
-        # --- Exception 3: No T_start detected ---
-        if self._solar_t_start is None:
-            if now_h > T_START_FALLBACK_HOUR:
-                _LOGGER.info(
-                    "Charge Delay: No solar production by %.0f:00 - unlocking (reason: no_t_start)",
-                    T_START_FALLBACK_HOUR
-                )
-                return _unlock("no_t_start")
-            # Still waiting for solar production
-            status["state"] = "Waiting for solar"
-            return True
-
-        # --- Get T_end ---
-        t_end = self._consumption_tracker.estimate_t_end()
-        status["solar_t_end"] = _h_to_hhmm(t_end)
-
-        # --- Exception 4: Past T_end with no active production ---
-        if now_h >= t_end:
-            any_charging = any(
-                (c.data.get("battery_power", 0) or 0) > 0
-                for c in self.coordinators if c.data
-            )
-            if not any_charging:
-                _LOGGER.info("Charge Delay: Past T_end (%.2fh) with no production - unlocking", t_end)
-                return _unlock("past_t_end")
-
-        # --- Calculate energy balance ---
-        # Energy needed to reach target_soc
-        energy_needed_kwh = sum(
-            (target_soc - c.data.get("battery_soc", 100)) / 100.0 * c.data.get("battery_total_energy", 0)
-            for c in self.coordinators if c.data
-        )
-
-        if energy_needed_kwh <= 0:
-            return _unlock("batteries_full")
-
-        # Charge time estimate
-        max_charge_power_kw = self._effective_system_capacity(
-            self.coordinators,
-            is_charging=True,
-        ) / 1000.0
-        if max_charge_power_kw <= 0:
-            return _unlock("no_charge_power")
-        charge_time_h = energy_needed_kwh / (max_charge_power_kw * CHARGE_EFFICIENCY)
-
-        # Remaining solar and consumption
-        if self.household_consumption_sensor and self._solar_production_accumulator > 0:
-            # Use actual measured solar production to estimate remaining
-            remaining_solar_kwh = max(0.0, forecast_today - self._solar_production_accumulator)
-            status["solar_produced_today_kwh"] = round(self._solar_production_accumulator, 2)
-        else:
-            solar_fraction_done = self._consumption_tracker.get_solar_fraction_done(now_h, self._solar_t_start, t_end)
-            remaining_solar_kwh = forecast_today * (1.0 - solar_fraction_done)
-
-        hours_to_t_end = max(0, t_end - now_h)
-        # avg_consumption is measured over the consumption window (outside any
-        # charging_time_slot, or 24h if none is configured) — see
-        # ConsumptionTracker.is_in_consumption_window. Prorate against the
-        # portion of [now, t_end] that overlaps that same window.
-        window_hours_per_day = self._consumption_tracker.get_consumption_window_hours_per_day()
-        if window_hours_per_day > 0 and hours_to_t_end > 0:
-            avg_consumption = self._consumption_tracker.get_avg_daily_consumption()
-            remaining_window_hours = self._consumption_tracker.consumption_window_hours_in_range(
-                now_h, t_end
-            )
-            remaining_consumption_kwh = avg_consumption * (
-                remaining_window_hours / window_hours_per_day
-            )
-        else:
-            remaining_consumption_kwh = 0
-
-        net_solar_for_battery = remaining_solar_kwh - remaining_consumption_kwh
-
-        # Time backup check
-        safety_margin_h = self._delay_safety_margin_h
-        time_limit_reached = (now_h + charge_time_h + safety_margin_h) >= t_end
-        energy_insufficient = net_solar_for_battery < (energy_needed_kwh * DELAY_SAFETY_FACTOR)
-
-        # Update status with calculation details
-        status["energy_needed_kwh"] = round(energy_needed_kwh, 2)
-        status["remaining_solar_kwh"] = round(remaining_solar_kwh, 2)
-        status["remaining_consumption_kwh"] = round(remaining_consumption_kwh, 2)
-        status["net_solar_kwh"] = round(net_solar_for_battery, 2)
-        status["charge_time_h"] = round(charge_time_h, 2)
-
-        # Estimate unlock time: earliest of time-backup and energy-balance triggers
-        time_backup_unlock_h = t_end - charge_time_h - safety_margin_h
-        energy_balance_unlock_h = self._estimate_energy_balance_unlock_h(
-            forecast_today, energy_needed_kwh, self._solar_t_start, t_end, now_h
-        )
-        if (
-            energy_balance_unlock_h is not None
-            and energy_balance_unlock_h <= now_h
-            and not energy_insufficient
-        ):
-            energy_balance_unlock_h = None
-        if energy_balance_unlock_h is not None:
-            est_unlock_h = min(time_backup_unlock_h, energy_balance_unlock_h)
-        else:
-            est_unlock_h = time_backup_unlock_h
-        status["estimated_unlock_time"] = _h_to_hhmm(max(now_h, est_unlock_h))
-
-        # Throttled logging (every 5 minutes)
-        current_time = monotonic()
-        if current_time - self._delay_last_log_time >= 300:
-            self._delay_last_log_time = current_time
-            _LOGGER.info(
-                "Charge Delay (target=%d%%): Solar remaining=%.1f kWh, Consumption remaining=%.1f kWh, "
-                "Net for battery=%.1f kWh, Needed=%.1f kWh (×%.1f=%.1f), "
-                "Charge time=%.1fh, Hours to T_end=%.1fh → %s",
-                target_soc, remaining_solar_kwh, remaining_consumption_kwh,
-                net_solar_for_battery, energy_needed_kwh,
-                DELAY_SAFETY_FACTOR, energy_needed_kwh * DELAY_SAFETY_FACTOR,
-                charge_time_h, hours_to_t_end,
-                "KEEP DELAY" if not energy_insufficient and not time_limit_reached else "UNLOCK"
-            )
-
-        if energy_insufficient:
-            _LOGGER.info(
-                "Charge Delay: Insufficient solar (net=%.1f < needed=%.1f) - unlocking (reason: energy_balance)",
-                net_solar_for_battery, energy_needed_kwh * DELAY_SAFETY_FACTOR
-            )
-            return _unlock("energy_balance")
-
-        if time_limit_reached:
-            _LOGGER.info(
-                "Charge Delay: Time limit (%.2f + %.2f + %.2f = %.2f >= T_end %.2f) - unlocking (reason: time_backup)",
-                now_h, charge_time_h, safety_margin_h,
-                now_h + charge_time_h + safety_margin_h, t_end
-            )
-            return _unlock("time_backup")
-
-        # All checks passed - keep delay active
-        status["state"] = f"Delayed ({status['estimated_unlock_time']} est.)"
-        return True
-
-    def _estimate_energy_balance_unlock_h(
-        self,
-        forecast_kwh: float,
-        energy_needed_kwh: float,
-        t_start: float,
-        t_end: float,
-        now_h: float,
-    ) -> float | None:
-        """Estimate when the energy balance condition will trigger the delay unlock.
-
-        Binary-searches for the earliest time t >= now_h where:
-          remaining_solar(t) - remaining_consumption(t) < energy_needed × DELAY_SAFETY_FACTOR
-
-        Returns the estimated hour as float, or None if it cannot be estimated.
-        """
-        daylight_hours = t_end - t_start
-        if daylight_hours <= 0:
-            return None
-
-        # Keep this aligned with _should_delay_charge(): avg_consumption is
-        # measured over the configured consumption window, not daylight hours.
-        avg_consumption = self._consumption_tracker.get_avg_daily_consumption()
-        window_hours_per_day = self._consumption_tracker.get_consumption_window_hours_per_day()
-        threshold = energy_needed_kwh * DELAY_SAFETY_FACTOR
-
-        def net_solar_at(t: float) -> float:
-            """Net solar available for battery at time t."""
-            progress = max(0.0, min(1.0, (t - t_start) / daylight_hours))
-            fraction_done = (1.0 - math.cos(math.pi * progress)) / 2.0
-            remaining_solar = forecast_kwh * (1.0 - fraction_done)
-            remaining_window_hours = self._consumption_tracker.consumption_window_hours_in_range(
-                t, t_end
-            )
-            remaining_consumption = (
-                avg_consumption * (remaining_window_hours / window_hours_per_day)
-                if window_hours_per_day > 0 and remaining_window_hours > 0
-                else 0.0
-            )
-            return remaining_solar - remaining_consumption
-
-        # If already below threshold now, return now_h
-        if net_solar_at(now_h) < threshold:
-            return now_h
-
-        # If still above threshold at t_end, no energy-balance unlock expected
-        if net_solar_at(t_end) >= threshold:
-            return None
-
-        # Binary search for crossing point
-        lo, hi = now_h, t_end
-        for _ in range(40):  # 40 iterations → precision < 1 second
-            mid = (lo + hi) / 2.0
-            if net_solar_at(mid) >= threshold:
-                lo = mid
-            else:
-                hi = mid
-
-        return (lo + hi) / 2.0
 
     def reset_pid_state(self):
         """Manually reset PID controller state. Useful when system is unstable."""
@@ -5255,7 +4826,7 @@ class ChargeDischargeController:
 
         if price_is_cheap and not self._realtime_price_charging:
             if not self._is_operation_allowed(is_charging=True):
-                if self.charge_delay_enabled and self._is_charge_delayed():
+                if self.charge_delay_enabled and self._charge_delay_mgr.is_charge_delayed():
                     reason = "charge delay active"
                 else:
                     reason = "time slot configuration"
@@ -5628,37 +5199,7 @@ class ChargeDischargeController:
         await self._weekly_charge_mgr.handle_registers()
 
         # === CHARGE DELAY: Daily reset and solar detection ===
-        if self.charge_delay_enabled:
-            from datetime import date
-            today = date.today()
-            if self._charge_delay_last_date != today:
-                if self._charge_delay_last_date is not None:
-                    # Real day change: reset delay state
-                    self._charge_delay_unlocked = False
-                    self._delay_setpoint_reached = False
-                    self._solar_t_start = None
-                    self._forecast_unavailable_since = None
-                # On first cycle after HA restart (_charge_delay_last_date is None),
-                # _charge_delay_unlocked may have been restored from storage by
-                # _weekly_charge_mgr.load_state() — preserve it rather than wiping it.
-                self._charge_delay_last_date = today
-                self._delay_last_log_time = 0
-                # Reset status dict for sensor (preserve safety_margin_min)
-                saved_margin = self._charge_delay_status.get("safety_margin_min")
-                for key in self._charge_delay_status:
-                    if key not in ("state", "safety_margin_min"):
-                        self._charge_delay_status[key] = None
-                self._charge_delay_status["state"] = "Idle"
-                if saved_margin is not None:
-                    self._charge_delay_status["safety_margin_min"] = saved_margin
-                self._charge_delay_forecast_cache = None
-                self._charge_delay_balance_needs_charge = True
-                self._schedule_charge_delay_state_save()
-                _LOGGER.info("Charge Delay: New day - state reset")
-            # Detect solar production start (shared with weekly charge)
-            self._consumption_tracker.detect_solar_t_start()
-            # Proactively evaluate delay to keep ChargeDelaySensor populated
-            self._is_charge_delayed()
+        self._charge_delay_mgr.handle_daily_reset_and_eval()
 
         # Refresh all operation blockers before mode dispatch and PD early returns.
         # This makes charge/discharge permission a shared registry instead of a
@@ -5908,7 +5449,7 @@ class ChargeDischargeController:
                 if is_charging:
                     reason = (
                         "charge delay active"
-                        if self.charge_delay_enabled and self._is_charge_delayed()
+                        if self.charge_delay_enabled and self._charge_delay_mgr.is_charge_delayed()
                         else "time slot configuration"
                     )
                     _LOGGER.debug("ChargeDischargeController: First execution - Charging NOT ALLOWED by %s, starting at 0W", reason)
@@ -6252,7 +5793,7 @@ class ChargeDischargeController:
             if is_charging:
                 reason = (
                     "charge delay active"
-                    if self.charge_delay_enabled and self._is_charge_delayed()
+                    if self.charge_delay_enabled and self._charge_delay_mgr.is_charge_delayed()
                     else "time slot configuration"
                 )
                 _LOGGER.debug("ChargeDischargeController: Charging NOT ALLOWED by %s - controller paused", reason)
@@ -6899,7 +6440,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Restore weekly charge completion state from previous session
     await controller._weekly_charge_mgr.load_state()
-    await controller.load_charge_delay_state()
+    await controller._charge_delay_mgr.load_state()
     # Restore solar T_start if not already restored by weekly charge state (date-based check)
     if controller._solar_t_start is None:
         await consumption_tracker.load_solar_t_start()
