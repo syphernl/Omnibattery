@@ -30,7 +30,6 @@ from .const import (
     CONF_CHARGING_TIME_SLOT,
     CONF_SOLAR_FORECAST_SENSOR,
     CONF_SOLAR_PRODUCTION_SENSOR,
-    CONF_HOUSEHOLD_CONSUMPTION_SENSOR,
     CONF_MAX_CONTRACTED_POWER,
     CONF_ENABLE_WEEKLY_FULL_CHARGE,
     CONF_WEEKLY_FULL_CHARGE_DAY,
@@ -199,13 +198,9 @@ async def async_setup_entry(
     has_mppt_pv = any(c.battery_version in ("vA", "vD") for c in coordinators)
     if controller and (getattr(controller, "solar_production_sensor", None) or has_mppt_pv):
         entities.append(DailySolarEnergySensor(controller))
-    # Added when a dedicated household sensor OR the (always-present) net grid
-    # meter is configured: with no household sensor the daily total is derived
-    # from grid + battery AC + solar, matching the power-flow Home Consumption sensor.
-    if controller and (
-        getattr(controller, "household_consumption_sensor", None)
-        or getattr(controller, "consumption_sensor", None)
-    ):
+    # The daily home total is derived from the (always-present) net grid meter:
+    # grid + battery AC + solar, matching the power-flow Home Consumption sensor.
+    if controller and getattr(controller, "consumption_sensor", None):
         entities.append(DailyHomeEnergySensor(controller))
     # Grid import/export are sign-split from the net consumption meter, which is
     # always configured, so these are always added.
@@ -688,9 +683,6 @@ class ConfigurationSummarySensor(SensorEntity):
         attrs["support_summary_version"] = 3
         attrs["grid_sensor"] = data.get("consumption_sensor")
         attrs["meter_inverted"] = data.get(CONF_METER_INVERTED, False)
-        attrs["household_consumption_sensor"] = self._entity_or_not_configured(
-            data.get(CONF_HOUSEHOLD_CONSUMPTION_SENSOR)
-        )
         attrs["solar_forecast_sensor"] = self._entity_or_not_configured(
             data.get(CONF_SOLAR_FORECAST_SENSOR)
         )
@@ -1304,12 +1296,11 @@ class DailySolarEnergySensor(SensorEntity):
 
 
 class DailyHomeEnergySensor(SensorEntity):
-    """Exact daily home consumption (kWh), integrated from the household power.
+    """Exact daily home consumption (kWh), integrated from the home power.
 
-    Uses the dedicated household_consumption_sensor when configured; otherwise the
-    value is derived from grid + battery AC + solar, matching the power-flow Home
-    Consumption sensor. Unlike the predictive-charging windowed accumulator, this
-    integrates the full 24 h.
+    The value is derived from grid + battery AC + solar, matching the power-flow
+    Home Consumption sensor. Unlike the predictive-charging windowed accumulator,
+    this integrates the full 24 h.
     """
 
     _attr_has_entity_name = True

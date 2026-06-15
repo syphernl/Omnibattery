@@ -60,21 +60,8 @@ CONF_ENABLE_PREDICTIVE_CHARGING = "enable_predictive_charging"
 CONF_CHARGING_TIME_SLOT = "charging_time_slot"
 CONF_SOLAR_FORECAST_SENSOR = "solar_forecast_sensor"
 CONF_SOLAR_PRODUCTION_SENSOR = "solar_production_sensor"
-CONF_HOUSEHOLD_CONSUMPTION_SENSOR = "household_consumption_sensor"
+CONF_HOUSEHOLD_CONSUMPTION_SENSOR = "household_consumption_sensor"  # legacy; migrated out in v6
 CONF_MAX_CONTRACTED_POWER = "max_contracted_power"
-
-
-def should_use_household_sensor(data) -> bool:
-    """Whether to read the dedicated household sensor instead of deriving home power.
-
-    The household sensor is honoured only when configured AND no solar production
-    sensor exists. With a solar sensor the derived value (grid + battery AC + solar)
-    is fully accurate and preferred, so the household sensor (a legacy precision
-    override, no longer offered in the config flow) is ignored.
-    """
-    return bool(data.get(CONF_HOUSEHOLD_CONSUMPTION_SENSOR)) and not bool(
-        data.get(CONF_SOLAR_PRODUCTION_SENSOR)
-    )
 
 # Time slots (operation slots) — v3 schema keys
 CONF_TIME_SLOTS = "no_discharge_time_slots"  # legacy key, kept for compat

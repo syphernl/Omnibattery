@@ -20,19 +20,20 @@ from custom_components.marstek_venus_energy_manager import ChargeDischargeContro
 from custom_components.marstek_venus_energy_manager.const import (
     PD_READBACK_EVERY_N_WRITES,
 )
+from tests.conftest import FakeCoordinator
 
 
-class _Coord:
-    """Identity-hashable coordinator stand-in."""
-
-    def __init__(self, data):
-        self.name = "BAT1"
-        self.is_available = True
-        self.rs485_user_disabled = False
-        self.balance_hold = False
-        self.min_soc = 10
-        self.data = data
-        self.write_power_atomic = AsyncMock()
+def _Coord(data):
+    """Identity-hashable, slot-guarded coordinator stand-in."""
+    return FakeCoordinator(
+        name="BAT1",
+        is_available=True,
+        rs485_user_disabled=False,
+        balance_hold=False,
+        min_soc=10,
+        data=data,
+        write_power_atomic=AsyncMock(),
+    )
 
 
 def _controller():

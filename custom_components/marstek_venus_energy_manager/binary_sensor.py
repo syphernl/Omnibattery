@@ -280,19 +280,16 @@ class PredictiveChargingStatusSensor(BinarySensorEntity):
 
         attrs["max_contracted_power"] = self.controller.max_contracted_power
 
-        # Household consumption sensor diagnostics + accumulator persistence
-        if self.controller.household_consumption_sensor:
-            attrs["consumption_source"] = "household_sensor"
-            attrs["household_consumption_sensor"] = self.controller.household_consumption_sensor
-            attrs["household_consumption_battery_window_kwh"] = round(self.controller._household_energy_accumulator, 2)
-            if self.controller._household_accumulator_date is not None:
-                attrs["household_accumulator_date"] = self.controller._household_accumulator_date.isoformat()
-            # Solar production accumulator persistence
-            attrs["solar_production_today_kwh"] = round(self.controller._solar_production_accumulator, 2)
-            if self.controller._solar_accumulator_date is not None:
-                attrs["solar_accumulator_date"] = self.controller._solar_accumulator_date.isoformat()
-        else:
-            attrs["consumption_source"] = "battery_discharge"
+        # Home consumption diagnostics: home power is always derived
+        # (grid + battery AC + solar); the household sensor was removed.
+        attrs["consumption_source"] = "derived (grid + battery AC + solar)"
+        attrs["household_consumption_battery_window_kwh"] = round(self.controller._household_energy_accumulator, 2)
+        if self.controller._household_accumulator_date is not None:
+            attrs["household_accumulator_date"] = self.controller._household_accumulator_date.isoformat()
+        # Measured solar produced today (real solar sensor + Venus MPPT)
+        attrs["solar_production_today_kwh"] = round(self.controller._daily_solar_energy_kwh, 2)
+        if self.controller._daily_solar_energy_date is not None:
+            attrs["solar_accumulator_date"] = self.controller._daily_solar_energy_date.isoformat()
 
         # Persist daily consumption history for restoration after restarts
         if hasattr(self.controller, '_daily_consumption_history') and self.controller._daily_consumption_history:

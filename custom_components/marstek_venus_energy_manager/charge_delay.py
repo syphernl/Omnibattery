@@ -378,10 +378,11 @@ class ChargeDelayManager:
         charge_time_h = energy_needed_kwh / (max_charge_power_kw * CHARGE_EFFICIENCY)
 
         # Remaining solar and consumption
-        if ctrl.household_consumption_sensor and ctrl._solar_production_accumulator > 0:
-            # Use actual measured solar production to estimate remaining
-            remaining_solar_kwh = max(0.0, forecast_today - ctrl._solar_production_accumulator)
-            status["solar_produced_today_kwh"] = round(ctrl._solar_production_accumulator, 2)
+        if ctrl._daily_solar_energy_kwh > 0:
+            # Use actual measured solar production (real solar sensor + Venus MPPT)
+            # to estimate the remaining production for today.
+            remaining_solar_kwh = max(0.0, forecast_today - ctrl._daily_solar_energy_kwh)
+            status["solar_produced_today_kwh"] = round(ctrl._daily_solar_energy_kwh, 2)
         else:
             solar_fraction_done = ctrl._consumption_tracker.get_solar_fraction_done(now_h, ctrl._solar_t_start, t_end)
             remaining_solar_kwh = forecast_today * (1.0 - solar_fraction_done)

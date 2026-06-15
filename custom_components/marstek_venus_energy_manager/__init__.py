@@ -5,7 +5,6 @@ import asyncio
 import logging
 import math
 import time
-from collections import namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
@@ -29,7 +28,6 @@ from .const import (
     CONF_HOUSEHOLD_CONSUMPTION_SENSOR,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_MAX_CONTRACTED_POWER,
-    should_use_household_sensor,
     DEFAULT_BASE_CONSUMPTION_KWH,
     SOC_REEVALUATION_THRESHOLD,
     CONF_ENABLE_WEEKLY_FULL_CHARGE,
@@ -43,7 +41,6 @@ from .const import (
     CONF_DELAY_SOC_SETPOINT,
     DEFAULT_DELAY_SOC_SETPOINT,
     DELAY_SOC_SETPOINT_HYSTERESIS,
-    CHARGE_EFFICIENCY,
     DELAY_SAFETY_FACTOR,
     T_START_FALLBACK_HOUR,
     EVENING_REEVAL_HOURS_BEFORE_TEND,
@@ -124,28 +121,15 @@ from .non_responsive_tracker import NonResponsiveTracker
 from .weekly_full_charge import WeeklyFullChargeManager
 from .active_balance_mode import ActiveBalanceModeManager
 from .max_soc_charge import MaxSocChargeManager
+from .pricing import DynamicPricingSchedule, notifications
+from .pricing.engine import PricingManager
 
 _LOGGER = logging.getLogger(__name__)
-
-# Dynamic pricing data structures
-PriceSlot = namedtuple("PriceSlot", ["start", "end", "price"])
 
 # Charge taper is voltage-only. SOC is deliberately ignored near the top because
 # some batteries report unstable SOC values while cell voltage remains reliable.
 FULL_CHARGE_TAPER_STEPS = ()
 
-
-@dataclass
-class DynamicPricingSchedule:
-    """Stores the result of a dynamic pricing evaluation."""
-    hours_needed: float
-    selected_slots: list  # list[PriceSlot]
-    average_price: float
-    estimated_cost: float
-    total_available_slots: int
-    evaluation_time: datetime
-    energy_deficit_kwh: float
-    charging_needed: bool = True
 
 # List of platforms to support.
 PLATFORMS: list[Platform] = [
@@ -213,7 +197,6 @@ async def _async_register_frontend_panel(hass: HomeAssistant, entry: ConfigEntry
         panel_config = {"domain": DOMAIN, "title": PANEL_TITLE}
         if entry is not None:
             from .const import (
-                CONF_HOUSEHOLD_CONSUMPTION_SENSOR,
                 CONF_SOLAR_FORECAST_SENSOR,
                 CONF_SOLAR_PRODUCTION_SENSOR,
             )
@@ -228,8 +211,10 @@ async def _async_register_frontend_panel(hass: HomeAssistant, entry: ConfigEntry
                 # the flag so the panel applies the same sign to the Grid node and
                 # the power-history chart.
                 panel_config["grid_inverted"] = bool(data.get(CONF_METER_INVERTED, False))
-            if data.get(CONF_HOUSEHOLD_CONSUMPTION_SENSOR):
-                panel_config["home_entity"] = data[CONF_HOUSEHOLD_CONSUMPTION_SENSOR]
+            # Home node = the integration's derived Home Consumption aggregate sensor
+            # (grid + battery AC + solar). The dedicated household sensor was removed
+            # from the config flow, so the derived sensor is the single home source.
+            panel_config["home_entity"] = "sensor.marstek_venus_system_system_home_consumption"
             if data.get(CONF_SOLAR_FORECAST_SENSOR):
                 panel_config["solar_forecast_entity"] = data[CONF_SOLAR_FORECAST_SENSOR]
             # Real-time PV production for the Solar node when panels are not wired
@@ -435,23 +420,19 @@ class ChargeDischargeController:
         self.predictive_charging_enabled = config_entry.data.get(CONF_ENABLE_PREDICTIVE_CHARGING, False)
         self.charging_time_slot = config_entry.data.get(CONF_CHARGING_TIME_SLOT, None)
         self.solar_forecast_sensor = config_entry.data.get(CONF_SOLAR_FORECAST_SENSOR, None)
-        self.household_consumption_sensor = config_entry.data.get(CONF_HOUSEHOLD_CONSUMPTION_SENSOR, None)
         self.solar_production_sensor = config_entry.data.get(CONF_SOLAR_PRODUCTION_SENSOR, None)
         self.max_contracted_power = config_entry.data.get(CONF_MAX_CONTRACTED_POWER, 7000)
 
-        # Household consumption accumulator (integration of power sensor over solar+battery window)
-        # Owned by ConsumptionTracker (see consumption_tracker.py); these public attrs
-        # remain on the controller so binary_sensor.py and aggregate_sensors.py keep reading them.
+        # Home consumption accumulator (integration of derived home power over the
+        # solar+battery window). Owned by ConsumptionTracker (see consumption_tracker.py);
+        # these public attrs remain on the controller so binary_sensor.py and
+        # aggregate_sensors.py keep reading them.
         self._household_energy_accumulator = 0.0
         self._household_accumulator_date = None  # date when accumulator was last reset
 
-        # Solar production accumulator (house + battery_net - grid, integrated over the day)
-        self._solar_production_accumulator = 0.0
-        self._solar_accumulator_date = None  # date when solar accumulator was last reset
-
         # Exact full-day energy totals, integrated from the REAL power sensors
-        # (solar_production_sensor / household_consumption_sensor) at control-loop
-        # cadence, reset at local midnight, persisted/restored. Surfaced as the
+        # (solar_production_sensor / derived home power) at control-loop cadence,
+        # reset at local midnight, persisted/restored. Surfaced as the
         # system_daily_solar_energy / system_daily_home_energy sensors.
         self._daily_solar_energy_kwh = 0.0
         self._daily_solar_energy_date = None
@@ -501,6 +482,7 @@ class ChargeDischargeController:
         self._dp_pre_evaluated_slots: dict = {}  # slot.start (datetime) → should_charge (bool)
         self._price_data_status = "not_evaluated"
         self._dp_evening_reevaluated_date = None  # Prevent multiple evening re-evaluations per day
+        self._pricing_mgr = PricingManager(hass, self)
 
         # Consumption history for dynamic base consumption (7-day rolling average)
         # Owned by ConsumptionTracker; the list lives on the controller so
@@ -695,16 +677,6 @@ class ChargeDischargeController:
     def _normal_balance_reset_if_new_day(self) -> None:
         """Delegate daily reset of top-of-charge state (weekly_full_charge calls this)."""
         self._max_soc_mgr.reset_if_new_day()
-
-    @property
-    def use_household_consumption_sensor(self) -> bool:
-        """Whether to read the household sensor instead of deriving home power.
-
-        Honoured only when a household sensor is configured AND no solar sensor
-        exists; with solar, the derived value (grid + battery AC + solar) is
-        preferred. See should_use_household_sensor().
-        """
-        return should_use_household_sensor(self.config_entry.data)
 
     def _refresh_normal_balance_blocks(self) -> None:
         """Delegate top-of-charge protection blockers to MaxSocChargeManager."""
@@ -975,7 +947,6 @@ class ChargeDischargeController:
             self.config_entry.data.get(CONF_ENABLE_WEEKLY_FULL_CHARGE_DELAY, False)
         )
         self.solar_forecast_sensor = self.config_entry.data.get(CONF_SOLAR_FORECAST_SENSOR, None)
-        self.household_consumption_sensor = self.config_entry.data.get(CONF_HOUSEHOLD_CONSUMPTION_SENSOR, None)
         self.solar_production_sensor = self.config_entry.data.get(CONF_SOLAR_PRODUCTION_SENSOR, None)
         self.predictive_charging_mode = self.config_entry.data.get(CONF_PREDICTIVE_CHARGING_MODE, PREDICTIVE_MODE_TIME_SLOT)
         self.price_sensor = self.config_entry.data.get(CONF_PRICE_SENSOR, None)
@@ -2219,44 +2190,8 @@ class ChargeDischargeController:
         _LOGGER.info("PID: State reset complete - system will re-initialize on next control cycle")
 
     async def _startup_dynamic_pricing_evaluation(self) -> None:
-        """Run dynamic pricing evaluation at startup if the 00:05 window was missed.
-
-        Called once via async_create_task after integration load. Waits 15 s for
-        coordinators to complete their first poll, then evaluates if today's schedule
-        has not been built yet (e.g. HA restarted after 00:05).
-        """
-        now = datetime.now()
-
-        # Nothing to do if we're still before the normal 00:05 window
-        eval_cutoff = now.replace(hour=0, minute=5, second=0, microsecond=0)
-        if now < eval_cutoff:
-            _LOGGER.debug("Dynamic pricing: startup check skipped — before 00:05 window")
-            return
-
-        # Already evaluated today (00:05 ran before the restart)
-        if self._dynamic_pricing_evaluated_date == now.date():
-            _LOGGER.debug("Dynamic pricing: startup check skipped — already evaluated today")
-            return
-
-        # Give coordinators time to finish their first Modbus poll cycle
-        await asyncio.sleep(15)
-
-        if not self.predictive_charging_enabled:
-            return  # Unloaded during sleep
-
-        coordinators_with_data = [c for c in self.coordinators if c.data]
-        if not coordinators_with_data:
-            _LOGGER.warning(
-                "Dynamic pricing: startup evaluation skipped — no coordinator data after 15 s"
-            )
-            return
-
-        _LOGGER.info(
-            "Dynamic pricing: running startup evaluation "
-            "(restarted at %s, schedule not yet built for %s)",
-            now.strftime("%H:%M"), now.date()
-        )
-        await self._evaluate_dynamic_pricing(extended_horizon=True)
+        """Delegates to PricingManager.startup_evaluation (scheduled from async_setup_entry)."""
+        await self._pricing_mgr.startup_evaluation()
 
     async def _should_activate_grid_charging(self) -> dict:
         """
@@ -2499,7 +2434,7 @@ class ChargeDischargeController:
             "days_in_history": days_in_history,
             "solar_surplus_kwh": solar_surplus_kwh,
             "grid_charge_kwh": grid_charge_kwh,
-            "consumption_source": "household_sensor" if self.household_consumption_sensor else "battery_discharge",
+            "consumption_source": "derived (grid + battery AC + solar)",
             "reason": (
                 f"Energy deficit: {energy_deficit_kwh:.2f} kWh "
                 f"(available: {total_available_kwh:.2f} kWh < consumption: {avg_consumption_kwh:.2f} kWh"
@@ -3171,1493 +3106,32 @@ class ChargeDischargeController:
         return await coordinator.write_register(rs485_reg, 21930, do_refresh=False)  # 0x55AA enable
 
     # =========================================================================
-    # DYNAMIC PRICING: Price parsing methods
+    # DYNAMIC PRICING / REAL-TIME PRICE: delegators to PricingManager
     # =========================================================================
-
-    def _parse_nordpool_prices(self, attrs: dict) -> list:
-        """Parse Nordpool / Energi Data Service price attributes.
-
-        Expected format in raw_today / raw_tomorrow:
-            [{"start": datetime, "end": datetime, "value": float}, ...]
-        Returns list[PriceSlot] in local time.
-        """
-        from homeassistant.util import dt as dt_util
-
-        slots = []
-        for key in ("raw_today", "raw_tomorrow"):
-            entries = attrs.get(key) or []
-            for entry in entries:
-                try:
-                    start = entry.get("start")
-                    end = entry.get("end")
-                    value = entry.get("value")
-                    if start is None or end is None or value is None:
-                        continue
-                    # Convert to local datetime if timezone-aware
-                    if hasattr(start, "tzinfo") and start.tzinfo is not None:
-                        start = dt_util.as_local(start).replace(tzinfo=None)
-                    if hasattr(end, "tzinfo") and end.tzinfo is not None:
-                        end = dt_util.as_local(end).replace(tzinfo=None)
-                    slots.append(PriceSlot(start=start, end=end, price=float(value)))
-                except Exception as exc:
-                    _LOGGER.debug("Dynamic pricing: failed to parse Nordpool entry %s: %s", entry, exc)
-        return slots
-
-    def _parse_pvpc_prices(self, attrs: dict) -> list:
-        """Parse PVPC (ESIOS REE, Spain) price attributes.
-
-        Expected format: "price_00h", "price_01h", ..., "price_23h" (float, €/kWh).
-        PVPC publishes next-day prices around 20:00; at 00:05 the attributes
-        reflect the current day's prices (already in effect).
-        Returns list[PriceSlot] for today in local time.
-        """
-        from datetime import date as _date, time as _time
-
-        slots = []
-        target_date = _date.today()
-        for hour in range(24):
-            attr_name = f"price_{hour:02d}h"
-            price_val = attrs.get(attr_name)
-            if price_val is None:
-                continue
-            try:
-                price = float(price_val)
-            except (ValueError, TypeError):
-                _LOGGER.debug("Dynamic pricing: failed to parse PVPC attribute %s=%s", attr_name, price_val)
-                continue
-            start = datetime.combine(target_date, _time(hour=hour, minute=0))
-            end = start + timedelta(hours=1)
-            slots.append(PriceSlot(start=start, end=end, price=price))
-        return slots
-
-    def _parse_ckw_prices(self, attrs: dict) -> list:
-        """Parse CKW (Switzerland) price attributes.
-
-        Expected format in 'prices':
-            [{"start": "2026-03-27T00:00+01:00", "end": "2026-03-27T00:15+01:00", "price": 0.2402}, ...]
-        96 slots per day (15-minute intervals). Prices in CHF/kWh.
-        Returns list[PriceSlot] in local time.
-        """
-        from homeassistant.util import dt as dt_util
-        from datetime import datetime as _dt
-
-        slots = []
-        entries = attrs.get("prices") or []
-        for entry in entries:
-            try:
-                start = entry.get("start")
-                end = entry.get("end")
-                price_val = entry.get("price")
-                if price_val is None:
-                    # Some CKW-derived sensors expose the total price under a
-                    # generic/value-style key. Values are expected in CHF/kWh.
-                    price_val = entry.get("value", entry.get("integrated"))
-                if start is None or end is None or price_val is None:
-                    continue
-                # Parse ISO 8601 string timestamps if needed
-                if isinstance(start, str):
-                    start = _dt.fromisoformat(start)
-                if isinstance(end, str):
-                    end = _dt.fromisoformat(end)
-                # Convert to local naive datetime
-                if hasattr(start, "tzinfo") and start.tzinfo is not None:
-                    start = dt_util.as_local(start).replace(tzinfo=None)
-                if hasattr(end, "tzinfo") and end.tzinfo is not None:
-                    end = dt_util.as_local(end).replace(tzinfo=None)
-                slots.append(PriceSlot(start=start, end=end, price=float(price_val)))
-            except Exception as exc:
-                _LOGGER.debug("Dynamic pricing: failed to parse CKW entry %s: %s", entry, exc)
-        return slots
-
-    def _parse_epex_prices(self, attrs: dict) -> list:
-        """Parse EPEX Spot (e.g. aWATTar) price attributes.
-
-        Expected format in 'data':
-            [{"start_time": "2026-05-22T00:00:00+02:00",
-              "end_time":   "2026-05-22T01:00:00+02:00",
-              "price_per_kwh": 0.14977}, ...]
-        Hourly slots in EUR/kWh, typically covering today and tomorrow
-        once published.
-        Returns list[PriceSlot] in local naive time.
-        """
-        from homeassistant.util import dt as dt_util
-        from datetime import datetime as _dt
-
-        slots = []
-        entries = attrs.get("data") or []
-        for entry in entries:
-            try:
-                start = entry.get("start_time")
-                end = entry.get("end_time")
-                price_val = entry.get("price_per_kwh")
-                if start is None or end is None or price_val is None:
-                    continue
-                if isinstance(start, str):
-                    start = _dt.fromisoformat(start)
-                if isinstance(end, str):
-                    end = _dt.fromisoformat(end)
-                if hasattr(start, "tzinfo") and start.tzinfo is not None:
-                    start = dt_util.as_local(start).replace(tzinfo=None)
-                if hasattr(end, "tzinfo") and end.tzinfo is not None:
-                    end = dt_util.as_local(end).replace(tzinfo=None)
-                slots.append(PriceSlot(start=start, end=end, price=float(price_val)))
-            except Exception as exc:
-                _LOGGER.debug("Dynamic pricing: failed to parse EPEX entry %s: %s", entry, exc)
-        return slots
-
-    def _parse_entsoe_prices(self, attrs: dict) -> list:
-        """Parse ENTSO-e Transparency Platform prices (HA jaapp integration).
-
-        Expected attributes:
-            prices_today / prices_tomorrow:
-                [{"time": "2026-05-13 00:00:00+02:00", "price": 0.26027}, ...]
-        Slots may be hourly or 15-minute. Each slot's end is inferred from the
-        next slot's start time; the last slot inherits the previous delta and
-        falls back to 60 minutes when only one entry exists.
-        Returns list[PriceSlot] in local naive time, in chronological order.
-        """
-        from homeassistant.util import dt as dt_util
-        from datetime import datetime as _dt, timedelta as _td
-
-        raw = []
-        for key in ("prices_today", "prices_tomorrow"):
-            entries = attrs.get(key) or []
-            for entry in entries:
-                try:
-                    start = entry.get("time")
-                    price_val = entry.get("price")
-                    if start is None or price_val is None:
-                        continue
-                    if isinstance(start, str):
-                        start = _dt.fromisoformat(start)
-                    if hasattr(start, "tzinfo") and start.tzinfo is not None:
-                        start = dt_util.as_local(start).replace(tzinfo=None)
-                    raw.append((start, float(price_val)))
-                except Exception as exc:
-                    _LOGGER.debug("Dynamic pricing: failed to parse ENTSO-e entry %s: %s", entry, exc)
-
-        if not raw:
-            return []
-
-        raw.sort(key=lambda x: x[0])
-        slots = []
-        for i, (start, price) in enumerate(raw):
-            if i + 1 < len(raw):
-                end = raw[i + 1][0]
-            elif i > 0:
-                end = start + (raw[i][0] - raw[i - 1][0])
-            else:
-                end = start + _td(hours=1)
-            slots.append(PriceSlot(start=start, end=end, price=price))
-        return slots
-
-    def _get_price_unit(self) -> str:
-        """Return the price unit label for the configured integration."""
-        if self.price_integration_type == PRICE_INTEGRATION_CKW:
-            return "CHF/kWh"
-        return "€/kWh"
-
-    def _get_current_price(self) -> Optional[float]:
-        """Return the current period price from the configured price sensor."""
-        if not self.price_sensor:
-            return None
-
-        price_state = self.hass.states.get(self.price_sensor)
-        if price_state is None:
-            return None
-
-        if self.price_integration_type == PRICE_INTEGRATION_CKW:
-            now = datetime.now()
-            for slot in self._parse_ckw_prices(price_state.attributes):
-                if slot.start <= now < slot.end:
-                    return slot.price
-
-        if self.price_integration_type == PRICE_INTEGRATION_EPEX:
-            now = datetime.now()
-            for slot in self._parse_epex_prices(price_state.attributes):
-                if slot.start <= now < slot.end:
-                    return slot.price
-
-        if self.price_integration_type == PRICE_INTEGRATION_ENTSOE:
-            now = datetime.now()
-            for slot in self._parse_entsoe_prices(price_state.attributes):
-                if slot.start <= now < slot.end:
-                    return slot.price
-
-        try:
-            return float(price_state.state)
-        except (ValueError, TypeError):
-            return None
-
-    def _parse_price_data(self, *, horizon_end=None) -> list:
-        """Read price sensor and return list[PriceSlot] for remaining slots up to horizon_end.
-
-        Dispatches to the correct parser based on price_integration_type.
-        When horizon_end is None, defaults to end of current day (today 23:59:59).
-        Returns empty list on error.
-        """
-        if not self.price_sensor:
-            _LOGGER.warning("Dynamic pricing: no price sensor configured")
-            self._price_data_status = "no_sensor"
-            return []
-
-        state = self.hass.states.get(self.price_sensor)
-        if state is None or state.state in ("unknown", "unavailable"):
-            _LOGGER.warning("Dynamic pricing: price sensor %s unavailable", self.price_sensor)
-            self._price_data_status = "sensor_unavailable"
-            return []
-
-        attrs = state.attributes
-        if self.price_integration_type == PRICE_INTEGRATION_PVPC:
-            raw_slots = self._parse_pvpc_prices(attrs)
-        elif self.price_integration_type == PRICE_INTEGRATION_CKW:
-            raw_slots = self._parse_ckw_prices(attrs)
-        elif self.price_integration_type == PRICE_INTEGRATION_EPEX:
-            raw_slots = self._parse_epex_prices(attrs)
-        elif self.price_integration_type == PRICE_INTEGRATION_ENTSOE:
-            raw_slots = self._parse_entsoe_prices(attrs)
-        else:
-            # Nordpool
-            raw_slots = self._parse_nordpool_prices(attrs)
-
-        if not raw_slots:
-            _LOGGER.warning(
-                "Dynamic pricing: no price data parsed from %s (integration=%s)",
-                self.price_sensor, self.price_integration_type
-            )
-            self._price_data_status = "no_slots"
-            return []
-
-        # Filter to remaining slots within the requested horizon.
-        # Default (horizon_end=None) keeps today-only semantics so mid-day restarts
-        # do not pull in tomorrow — callers that need cross-midnight slots pass an explicit horizon.
-        now = datetime.now()
-        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        effective_horizon = horizon_end if horizon_end is not None else end_of_day
-        filtered = [s for s in raw_slots if s.end > now and s.start <= effective_horizon]
-        self._price_data_status = f"ok ({len(filtered)} slots)"
-        _LOGGER.info("Dynamic pricing: parsed %d slots (%d within horizon)", len(raw_slots), len(filtered))
-        return filtered
-
-    # =========================================================================
-    # DYNAMIC PRICING: Scheduling methods
-    # =========================================================================
-
-    def _calculate_charging_hours_needed(self, deficit_kwh: float) -> float:
-        """Calculate how many hours of charging are needed to cover deficit.
-
-        Uses the effective charge power: min(ICP limit, total battery charge capacity).
-        If ICP > battery capacity, the batteries are the bottleneck and using ICP alone
-        would underestimate the number of hours needed.
-        """
-        effective_power_kw = min(self.max_contracted_power, self.max_charge_capacity) / 1000.0
-        if effective_power_kw <= 0:
-            return 1.0  # Fallback: at least 1 hour if no power info available
-        hours = deficit_kwh / (effective_power_kw * CHARGE_EFFICIENCY)
-        return math.ceil(hours * 2) / 2  # Round up to nearest 0.5h
-
-    def _select_cheapest_blocks(self, slots: list, hours_needed: float, slot_duration_h: float) -> list:
-        """Select cheapest slots using a block strategy for sub-hourly granularity.
-
-        Groups consecutive slots into 1-hour blocks (e.g. 4 × 15-min slots).
-        Selects the cheapest block first, then the next cheapest, etc.
-        Any remainder hours (e.g. 0.5h) use the cheapest consecutive sub-block
-        of the appropriate size from the remaining slots.
-
-        Args:
-            slots: list[PriceSlot] already filtered (future + threshold)
-            hours_needed: fractional hours of charging needed
-            slot_duration_h: duration of each slot in hours (e.g. 0.25 for 15-min)
-
-        Returns:
-            Sorted (by start time) list of selected PriceSlot
-        """
-        block_size = max(1, round(1.0 / slot_duration_h))  # 4 for 15-min slots
-        sorted_slots = sorted(slots, key=lambda s: s.start)
-        n = len(sorted_slots)
-
-        full_blocks_needed = int(hours_needed)
-        remainder_slots_needed = round((hours_needed - full_blocks_needed) / slot_duration_h)
-
-        def find_cheapest_window(available: list, window_size: int):
-            """Return indices (into sorted_slots) of the cheapest time-consecutive window."""
-            best_avg = float("inf")
-            best_window = None
-            for i in range(len(available) - window_size + 1):
-                candidate = available[i:i + window_size]
-                # Verify slots are time-consecutive (gap <= 1 min tolerance)
-                consecutive = all(
-                    abs((sorted_slots[candidate[j + 1]].start - sorted_slots[candidate[j]].end).total_seconds()) < 60
-                    for j in range(len(candidate) - 1)
-                )
-                if not consecutive:
-                    continue
-                avg = sum(sorted_slots[idx].price for idx in candidate) / window_size
-                # Prefer lower price; break ties by earlier start time
-                if avg < best_avg or (avg == best_avg and best_window is not None and
-                        sorted_slots[candidate[0]].start < sorted_slots[best_window[0]].start):
-                    best_avg = avg
-                    best_window = list(candidate)
-            return best_window
-
-        available = list(range(n))
-        selected_indices = []
-
-        # Select full 1-hour blocks
-        for block_num in range(full_blocks_needed):
-            window = find_cheapest_window(available, block_size)
-            if window is None:
-                _LOGGER.warning(
-                    "Dynamic pricing: no consecutive block of %d slots available for block %d/%d, "
-                    "falling back to cheapest individual slots",
-                    block_size, block_num + 1, full_blocks_needed
-                )
-                # Fall back: pick cheapest individual available slots for this block
-                by_price = sorted(available, key=lambda i: sorted_slots[i].price)
-                take = min(block_size, len(by_price))
-                window = by_price[:take]
-
-            selected_indices.extend(window)
-            for idx in window:
-                available.remove(idx)
-
-        # Select partial block (remainder)
-        if remainder_slots_needed > 0 and available:
-            window = find_cheapest_window(available, remainder_slots_needed)
-            if window is None:
-                _LOGGER.warning(
-                    "Dynamic pricing: no consecutive window of %d slots for remainder, "
-                    "falling back to cheapest individual slots",
-                    remainder_slots_needed
-                )
-                by_price = sorted(available, key=lambda i: sorted_slots[i].price)
-                window = by_price[:remainder_slots_needed]
-            selected_indices.extend(window)
-
-        hours_accumulated = len(selected_indices) * slot_duration_h
-        if hours_accumulated < hours_needed:
-            _LOGGER.warning(
-                "Dynamic pricing: only %.1fh selected in blocks, needed %.1fh "
-                "(threshold may be too low or not enough consecutive slots)",
-                hours_accumulated, hours_needed
-            )
-
-        _LOGGER.info(
-            "Dynamic pricing (block strategy): %d blocks × %d slots + %d remainder slots selected "
-            "(%.1fh total, slot_duration=%.2fh)",
-            full_blocks_needed, block_size, remainder_slots_needed,
-            hours_accumulated, slot_duration_h
-        )
-        return sorted([sorted_slots[i] for i in selected_indices], key=lambda s: s.start)
-
-    def _select_cheapest_hours(self, slots: list, hours_needed: float) -> list:
-        """Filter slots by max_price_threshold, sort by price, return cheapest N.
-
-        For sub-hourly granularity (e.g. 15-min slots) dispatches to
-        _select_cheapest_blocks to avoid scattered fragmented charging windows.
-
-        Args:
-            slots: list[PriceSlot] available in next 24h
-            hours_needed: fractional hours of charging needed
-
-        Returns:
-            Sorted (by start time) list of selected PriceSlot
-        """
-        now = datetime.now()
-
-        # Remove past slots
-        future_slots = [s for s in slots if s.end > now]
-
-        # Apply price threshold filter
-        if self.max_price_threshold is not None:
-            future_slots = [s for s in future_slots if s.price <= self.max_price_threshold]
-            _LOGGER.info(
-                "Dynamic pricing: %d slots after price threshold filter (max=%.3f)",
-                len(future_slots), self.max_price_threshold
-            )
-
-        if not future_slots:
-            _LOGGER.warning("Dynamic pricing: no slots available after filtering")
-            return []
-
-        # Dispatch to block strategy for sub-hourly granularity
-        slot_duration_h = (future_slots[0].end - future_slots[0].start).total_seconds() / 3600.0
-        if slot_duration_h < 0.9:
-            return self._select_cheapest_blocks(future_slots, hours_needed, slot_duration_h)
-
-        # Hourly slots: sort by price, accumulate until hours_needed is met
-        sorted_slots = sorted(future_slots, key=lambda s: (s.price, s.start))
-
-        selected = []
-        hours_accumulated = 0.0
-        for slot in sorted_slots:
-            slot_duration = (slot.end - slot.start).total_seconds() / 3600.0
-            selected.append(slot)
-            hours_accumulated += slot_duration
-            if hours_accumulated >= hours_needed:
-                break
-
-        if hours_accumulated < hours_needed:
-            _LOGGER.warning(
-                "Dynamic pricing: only %.1fh available, needed %.1fh (threshold may be too low)",
-                hours_accumulated, hours_needed
-            )
-
-        # Return sorted by start time for chronological execution
-        return sorted(selected, key=lambda s: s.start)
 
     def _is_in_dynamic_pricing_slot(self) -> bool:
-        """Return True if current time falls within a selected cheap slot."""
-        if not self._dynamic_pricing_schedule:
-            return False
-        now = datetime.now()
-        return any(s.start <= now < s.end for s in self._dynamic_pricing_schedule.selected_slots)
-
-    def _is_dynamic_pricing_evaluation_time(self) -> bool:
-        """Return True if it's 00:05 ±5 min and we haven't evaluated today."""
-        now = datetime.now()
-        today = now.date()
-
-        if self._dynamic_pricing_evaluated_date == today:
-            return False
-
-        eval_time = now.replace(hour=0, minute=5, second=0, microsecond=0)
-        time_diff = abs((now - eval_time).total_seconds())
-        return time_diff <= 5 * 60  # ±5 minutes tolerance
-
-    def _format_predictive_notification_message(
-        self,
-        decision_data: dict,
-        is_daily_evaluation: bool = False,
-    ) -> tuple[str, str]:
-        """Format notification title and message from decision data.
-
-        Args:
-            decision_data: Dict from _should_activate_grid_charging() with energy balance data
-            is_daily_evaluation: True when called from daily evaluation in automation_slots mode
-
-        Returns:
-            tuple: (title, message)
-        """
-        from datetime import time as dt_time
-
-        should_charge = decision_data["should_charge"]
-        solar_forecast = decision_data["solar_forecast_kwh"]
-        usable_energy = decision_data["usable_energy_kwh"]
-        avg_soc = decision_data["avg_soc"]
-        avg_consumption = decision_data["avg_consumption_kwh"]
-        total_available = decision_data["total_available_kwh"]
-        energy_deficit = decision_data["energy_deficit_kwh"]
-        days_in_history = decision_data["days_in_history"]
-
-        solar_str = f"{solar_forecast:.2f} kWh" if solar_forecast is not None else "unavailable"
-        consumption_str = (
-            f"{avg_consumption:.2f} kWh (default)" if days_in_history == 0
-            else f"{avg_consumption:.2f} kWh ({days_in_history}-day avg)"
-        )
-        effective_power = min(self.max_contracted_power, self.max_charge_capacity)
-        power_str = (
-            f"{effective_power}W (ICP: {self.max_contracted_power}W, batteries: {self.max_charge_capacity}W)"
-        )
-
-        # Safe mode: no solar forecast
-        if solar_forecast is None:
-            title = "Predictive Charging: Safe mode"
-            message = (
-                f"⚠️ No solar forecast available — conservative mode\n\n"
-                f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                f"📊 Consumption: {consumption_str}\n\n"
-                f"Grid charging NOT activated."
-            )
-            return (title, message)
-
-        # Sufficient energy — no charging needed
-        if not should_charge:
-            title = "Predictive Charging: Not required"
-            message = (
-                f"✓ Sufficient energy for today\n\n"
-                f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                f"☀️ Solar forecast: {solar_str}\n"
-                f"📊 Consumption: {consumption_str}\n"
-                f"✅ Available: {total_available:.2f} kWh ≥ {avg_consumption:.2f} kWh needed\n\n"
-                f"No grid charging required."
-            )
-            return (title, message)
-
-        # Charging needed
-        try:
-            start_time = dt_time.fromisoformat(self.charging_time_slot["start_time"])
-            end_time = dt_time.fromisoformat(self.charging_time_slot["end_time"])
-            slot_str = f"{start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}"
-        except Exception:
-            slot_str = None
-
-        if is_daily_evaluation:
-            title = "Predictive Charging: Expected today"
-            timing_line = "⏰ Charging will activate when prices are low\n"
-        else:
-            title = "Predictive Charging: STARTED"
-            timing_line = (
-                f"⏰ Charging until: {end_time.strftime('%H:%M')}\n"
-                if slot_str else "⏰ Charging now from grid\n"
-            )
-
-        grid_charge = decision_data.get("grid_charge_kwh")
-        solar_surplus = decision_data.get("solar_surplus_kwh")
-        if grid_charge is not None and solar_surplus is not None:
-            # When charging triggers, solar_surplus ≤ gap_to_max, so solar will contribute exactly solar_surplus to battery
-            charge_split_line = (
-                f"🔌 Grid: {grid_charge:.2f} kWh — solar will charge the remaining {solar_surplus:.2f} kWh\n"
-            )
-        else:
-            charge_split_line = f"⚡ Deficit: {energy_deficit:.2f} kWh\n"
-
-        message = (
-            f"⚡ Energy deficit — grid charging needed\n\n"
-            f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-            f"☀️ Solar forecast: {solar_str}\n"
-            f"📊 Consumption: {consumption_str}\n"
-            f"{charge_split_line}\n"
-            f"{timing_line}"
-            f"Max charge power: {power_str}"
-        )
-
-        return (title, message)
-
-    # =========================================================================
-    # DYNAMIC PRICING: Evaluation and notification methods
-    # =========================================================================
-
-    async def _evaluate_dynamic_pricing(self, *, extended_horizon: bool = False) -> None:
-        """Main evaluation at 00:05: energy balance + prices → schedule."""
-        now = datetime.now()
-        today = now.date()
-
-        _LOGGER.info("Dynamic pricing: running evaluation at %s", now.strftime("%H:%M"))
-
-        # Step 1: Energy balance
-        decision_data = await self._should_activate_grid_charging()
-        self._last_decision_data = decision_data
-        charging_needed = decision_data["should_charge"]
-
-        # Step 2: Parse price data (always, even without deficit — for diagnostics)
-        if extended_horizon:
-            end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=0)
-            horizon = max(end_of_day, now + timedelta(hours=12))
-        else:
-            horizon = None
-        slots = self._parse_price_data(horizon_end=horizon)
-        if slots:
-            self._dp_daily_avg_price = sum(s.price for s in slots) / len(slots)
-            _LOGGER.debug("Dynamic pricing: daily average price %.4f from %d slots", self._dp_daily_avg_price, len(slots))
-        if not slots:
-            if not charging_needed:
-                # No deficit + no price data: nothing to evaluate
-                self._dynamic_pricing_schedule = None
-                self._dynamic_pricing_evaluated_date = today
-                self._dp_eval_retry_count = 0
-                _LOGGER.info("Dynamic pricing: no charging needed and no price data available")
-                await self._send_dynamic_pricing_notification(decision_data=decision_data, schedule=None)
-                return
-            # Has deficit but no price data: retry
-            self._dp_eval_retry_count += 1
-            _LOGGER.warning(
-                "Dynamic pricing: no price data available at 00:05 (retry %d/4)",
-                self._dp_eval_retry_count
-            )
-            return  # Will retry up to 4 times (~30 min intervals via control loop)
-
-        # Step 3: Calculate hours needed and select cheapest slots
-        deficit_kwh = decision_data["energy_deficit_kwh"]
-        if charging_needed:
-            hours_needed = self._calculate_charging_hours_needed(deficit_kwh)
-        else:
-            # No deficit — use daily consumption as reference so the number of
-            # selected hours is meaningful (same basis the algorithm uses to decide)
-            hours_needed = self._calculate_charging_hours_needed(
-                decision_data["avg_consumption_kwh"]
-            )
-        selected = self._select_cheapest_hours(slots, hours_needed)
-
-        if not selected:
-            self._dynamic_pricing_schedule = None
-            self._dynamic_pricing_evaluated_date = today
-            self._dp_eval_retry_count = 0
-            _LOGGER.warning("Dynamic pricing: no slots selected (all above threshold?)")
-            await self._send_dynamic_pricing_notification(decision_data=decision_data, schedule=None)
-            return
-
-        # Step 4: Build schedule
-        avg_price = sum(s.price for s in selected) / len(selected)
-        effective_power_kw = min(self.max_contracted_power, self.max_charge_capacity) / 1000.0
-        estimated_cost = avg_price * effective_power_kw * hours_needed
-
-        schedule = DynamicPricingSchedule(
-            hours_needed=hours_needed,
-            selected_slots=selected,
-            average_price=avg_price,
-            estimated_cost=estimated_cost,
-            total_available_slots=len(slots),
-            evaluation_time=now,
-            energy_deficit_kwh=deficit_kwh,
-            charging_needed=charging_needed,
-        )
-        self._dynamic_pricing_schedule = schedule
-        # Use the date of the selected slots (tomorrow at eval time) so the midnight
-        # reset only fires the day AFTER the slots — not before they can be used.
-        slots_date = max(s.start.date() for s in selected) if selected else (now.date() + timedelta(days=1))
-        self._dynamic_pricing_evaluated_date = slots_date
-        self._dp_eval_retry_count = 0
-
-        _LOGGER.info(
-            "Dynamic pricing: evaluation complete — %d slots selected, %.1fh, avg=%.3f %s, charging_needed=%s",
-            len(selected), hours_needed, avg_price, self._get_price_unit(), charging_needed
-        )
-        await self._send_dynamic_pricing_notification(decision_data=decision_data, schedule=schedule)
-
-    def _format_dynamic_pricing_notification(
-        self,
-        decision_data: dict,
-        schedule: Optional[DynamicPricingSchedule]
-    ) -> tuple[str, str]:
-        """Format dynamic pricing evaluation notification."""
-        avg_soc = decision_data.get("avg_soc", 0)
-        usable_energy = decision_data.get("usable_energy_kwh", 0)
-        solar_forecast = decision_data.get("solar_forecast_kwh")
-        avg_consumption = decision_data.get("avg_consumption_kwh", 0)
-        energy_deficit = decision_data.get("energy_deficit_kwh", 0)
-        days_in_history = decision_data.get("days_in_history", 0)
-
-        solar_str = f"{solar_forecast:.2f} kWh" if solar_forecast is not None else "N/A"
-        consumption_str = (
-            f"{avg_consumption:.2f} kWh ({days_in_history}-day avg)"
-            if days_in_history > 0 else f"{avg_consumption:.2f} kWh (default)"
-        )
-
-        if schedule is None or not schedule.selected_slots:
-            if not decision_data.get("should_charge", False):
-                title = "Predictive Charging: Price Optimization - NOT needed"
-                message = (
-                    f"✓ Sufficient energy for today\n\n"
-                    f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                    f"☀️ Solar forecast: {solar_str}\n"
-                    f"📊 Consumption: {consumption_str}\n\n"
-                    f"✅ Available: {decision_data.get('total_available_kwh', 0):.2f} kWh ≥ {avg_consumption:.2f} kWh needed\n"
-                    f"No grid charging required."
-                )
-            else:
-                title = "Predictive Charging: Price Optimization - No slots available"
-                message = (
-                    f"⚠️ Charging needed but no valid price slots found\n\n"
-                    f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                    f"☀️ Solar forecast: {solar_str}\n"
-                    f"📊 Consumption: {consumption_str}\n"
-                    f"⚡ Energy deficit: {energy_deficit:.2f} kWh\n\n"
-                    f"Check price sensor or raise max price threshold."
-                )
-        else:
-            hours_needed = schedule.hours_needed
-            n_slots = len(schedule.selected_slots)
-            slots_label = f"{n_slots} slot{'s' if n_slots != 1 else ''}" if n_slots != int(hours_needed) else ""
-            hours_label = f"{hours_needed:.1f}h" + (f" ({slots_label})" if slots_label else "")
-            title = f"Predictive Charging: Price Optimization - {hours_label} selected"
-
-            unit = self._get_price_unit()
-            cost_unit = unit.split("/")[0]  # "€/kWh" → "€", "CHF" → "CHF"
-            slot_lines = "\n".join(
-                f"  • {s.start.strftime('%H:%M')}-{s.end.strftime('%H:%M')} → {s.price:.4f} {unit}"
-                for s in schedule.selected_slots
-            )
-            threshold_line = (
-                f"Max price limit: {self.max_price_threshold:.4f} {unit}\n"
-                if self.max_price_threshold is not None else ""
-            )
-            if not schedule.charging_needed:
-                title = f"Predictive Charging: Price Info - {hours_label} cheapest"
-                message = (
-                    f"✓ No grid charging needed today\n\n"
-                    f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                    f"☀️ Solar forecast: {solar_str}\n"
-                    f"📊 Consumption: {consumption_str}\n"
-                    f"✅ Available: {decision_data.get('total_available_kwh', 0):.2f} kWh ≥ {decision_data.get('avg_consumption_kwh', 0):.2f} kWh needed\n\n"
-                    f"💰 Cheapest hours today (informational):\n{slot_lines}\n\n"
-                    f"Average price: {schedule.average_price:.4f} {unit}\n"
-                    f"{threshold_line}"
-                    f"No charging will activate."
-                )
-            else:
-                message = (
-                    f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-                    f"☀️ Solar forecast: {solar_str}\n"
-                    f"📊 Consumption: {consumption_str}\n"
-                    f"⚡ Energy deficit: {energy_deficit:.2f} kWh → {hours_needed:.1f}h of charging needed\n\n"
-                    f"💰 Selected hours (cheapest):\n{slot_lines}\n\n"
-                    f"Average price: {schedule.average_price:.4f} {unit}\n"
-                    f"Estimated cost: ~{schedule.estimated_cost:.2f} {cost_unit}\n"
-                    f"{threshold_line}"
-                    f"Max charge power: {min(self.max_contracted_power, self.max_charge_capacity)}W "
-                    f"(ICP: {self.max_contracted_power}W, batteries: {self.max_charge_capacity}W)"
-                )
-
-        return (title, message)
-
-    async def _send_dynamic_pricing_notification(
-        self,
-        decision_data: dict,
-        schedule: Optional[DynamicPricingSchedule]
-    ) -> None:
-        """Send persistent notification for dynamic pricing evaluation."""
-        title, message = self._format_dynamic_pricing_notification(decision_data, schedule)
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": title,
-                "message": message,
-                "notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evaluation",
-            },
-        )
-
-    async def _send_dynamic_pricing_slot_start_notification(self, slot: PriceSlot) -> None:
-        """Send notification when a cheap pricing slot starts."""
-        schedule = self._dynamic_pricing_schedule
-        if not schedule:
-            return
-
-        remaining_slots = [
-            s for s in schedule.selected_slots if s.start > slot.start
-        ]
-        next_slot_str = (
-            f"Next slot: {remaining_slots[0].start.strftime('%H:%M')}"
-            if remaining_slots else "Last slot"
-        )
-        remaining_str = (
-            f"{len(remaining_slots)} slot(s) remaining"
-            if remaining_slots else "No more slots today"
-        )
-
-        title = f"Predictive Charging STARTED ({slot.price:.4f} {self._get_price_unit()})"
-        message = (
-            f"⚡ Charging at max {self.max_contracted_power}W\n"
-            f"Slot: {slot.start.strftime('%H:%M')}-{slot.end.strftime('%H:%M')}\n"
-            f"{next_slot_str} · {remaining_str}"
-        )
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": title,
-                "message": message,
-                "notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evaluation",
-            },
-        )
-
-    async def _check_dp_pre_slot_reevaluation(self) -> None:
-        """Re-evaluate energy balance 1 hour before each upcoming dynamic pricing slot.
-
-        If the system already charged in an earlier slot and the battery is now
-        sufficiently charged (solar + current SOC covers consumption), marks the
-        next slot as skippable so it does not activate unnecessarily.
-        Called every 2.5 s from the dynamic pricing control loop handler.
-        """
-        if not self._dynamic_pricing_schedule or not self._dynamic_pricing_schedule.charging_needed:
-            return
-
-        now = datetime.now()
-        upcoming = [s for s in self._dynamic_pricing_schedule.selected_slots if s.start > now]
-        if not upcoming:
-            return  # No future slots left
-
-        next_slot = upcoming[0]
-
-        # Only act during the ±5-minute window that is exactly 1 hour before the slot
-        pre_eval_time = next_slot.start - timedelta(hours=1)
-        if abs((now - pre_eval_time).total_seconds()) > 5 * 60:
-            return
-
-        # Already evaluated this slot → nothing to do
-        if next_slot.start in self._dp_pre_evaluated_slots:
-            return
-
-        # Skip re-evaluation if we're currently charging — the battery hasn't
-        # benefited from the ongoing charge yet, so the result would be the same
-        # as the original 00:05 evaluation (misleading and noisy).
-        # This covers back-to-back slots where the pre-eval window of slot B
-        # coincides with the active charging window of slot A.
-        if self._current_price_slot_active:
-            return
-
-        _LOGGER.info(
-            "Dynamic pricing: running pre-slot re-evaluation for slot at %s",
-            next_slot.start.strftime("%H:%M")
-        )
-        decision = await self._should_activate_grid_charging()
-        should_charge = decision["should_charge"]
-        self._dp_pre_evaluated_slots[next_slot.start] = should_charge
-
-        if should_charge:
-            await self._send_dp_pre_slot_reevaluation_notification(next_slot, decision)
-
-    async def _send_dp_pre_slot_reevaluation_notification(
-        self, slot: PriceSlot, decision: dict
-    ) -> None:
-        """Send notification when a pre-slot re-evaluation confirms charging is still needed.
-
-        Only called when should_charge=True. Skipped slots are logged silently.
-        """
-        avg_soc = decision.get("avg_soc", 0)
-        usable_energy = decision.get("usable_energy_kwh", 0)
-        solar_forecast = decision.get("solar_forecast_kwh")
-        avg_consumption = decision.get("avg_consumption_kwh", 0)
-        energy_deficit = decision.get("energy_deficit_kwh", 0)
-        days_in_history = decision.get("days_in_history", 0)
-        unit = self._get_price_unit()
-
-        solar_str = f"{solar_forecast:.2f} kWh" if solar_forecast is not None else "N/A"
-        consumption_str = (
-            f"{avg_consumption:.2f} kWh ({days_in_history}-day avg)"
-            if days_in_history > 0 else f"{avg_consumption:.2f} kWh (default)"
-        )
-
-        title = f"Predictive Charging: slot {slot.start.strftime('%H:%M')} confirmed — charging needed"
-        message = (
-            f"🔋 Battery: {avg_soc:.0f}% ({usable_energy:.2f} kWh usable)\n"
-            f"☀️ Solar forecast: {solar_str}\n"
-            f"📊 Consumption: {consumption_str}\n"
-            f"⚡ Energy deficit: {energy_deficit:.2f} kWh\n\n"
-            f"Slot: {slot.start.strftime('%H:%M')}–{slot.end.strftime('%H:%M')} "
-            f"@ {slot.price:.4f} {unit}\n"
-            f"→ Charging will activate at {slot.start.strftime('%H:%M')}"
-        )
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": title,
-                "message": message,
-                "notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evaluation",
-            },
-        )
-
-    # =========================================================================
-    # DYNAMIC PRICING: Control loop handler
-    # =========================================================================
-
-    def _is_evening_reevaluation_time(self) -> bool:
-        """Return True when it's time for the late-day battery re-evaluation.
-
-        Triggers once per day either:
-        - 1.5 h before estimated T_end (when solar T_start was detected), or
-        - at EVENING_REEVAL_FALLBACK_HOUR (16:00) when no T_start was seen today.
-
-        Does not trigger after 23:00 to avoid clashing with the 00:05 evaluation.
-        """
-        from datetime import datetime
-        now = datetime.now()
-
-        if self._dp_evening_reevaluated_date == now.date():
-            return False
-
-        now_h = now.hour + now.minute / 60.0
-        if now_h >= 23.0:
-            return False
-
-        if self._solar_t_start is not None:
-            trigger_h = self._consumption_tracker.estimate_t_end() - EVENING_REEVAL_HOURS_BEFORE_TEND
-        else:
-            trigger_h = EVENING_REEVAL_FALLBACK_HOUR
-
-        return now_h >= trigger_h
-
-    async def _evaluate_evening_recharge(self) -> None:
-        """Late-day re-evaluation: charge batteries cheaply if solar fell short.
-
-        Runs once per day around T_end - 1.5h.  Checks the current battery SOC
-        against the configured max_soc and, accounting for remaining solar, decides
-        whether to schedule cheap slots from now through the next 12 hours (crosses midnight when tomorrow prices are available).
-
-        Decision flow:
-        1. Batteries already at target → skip.
-        2. Calculate remaining solar (actual accumulator if available, else sinusoidal).
-        3. Net deficit = energy_to_full - remaining_solar_for_battery.
-        4. Deficit < EVENING_DEFICIT_THRESHOLD_KWH → skip.
-        5. Parse today's future price slots; select cheapest to cover the deficit.
-        6. Merge into existing schedule (or create a new one).
-        7. Send notification.
-        """
-        from datetime import datetime
-
-        now = datetime.now()
-        today = now.date()
-        self._dp_evening_reevaluated_date = today  # mark before any early-returns
-
-        _LOGGER.info("Dynamic pricing: running evening re-evaluation at %s", now.strftime("%H:%M"))
-
-        # --- Battery state ---
-        coordinators_with_data = [c for c in self.coordinators if c.data]
-        if not coordinators_with_data:
-            _LOGGER.info("Evening recharge: no battery data, skipping")
-            return
-
-        # Energy needed to bring all batteries to their max_soc
-        energy_to_full_kwh = sum(
-            max(0.0, (c.max_soc - (c.data.get("battery_soc", c.max_soc) or 0)) / 100.0
-                * (c.data.get("battery_total_energy", 0) or 0))
-            for c in coordinators_with_data
-        )
-
-        if energy_to_full_kwh <= EVENING_DEFICIT_THRESHOLD_KWH:
-            _LOGGER.info(
-                "Evening recharge: batteries essentially full (%.2f kWh to target), skipping",
-                energy_to_full_kwh,
-            )
-            return
-
-        # --- Remaining solar estimate ---
-        now_h = now.hour + now.minute / 60.0
-        remaining_solar_kwh = 0.0
-
-        if self.solar_forecast_sensor:
-            forecast_state = self.hass.states.get(self.solar_forecast_sensor)
-            if forecast_state and forecast_state.state not in ("unknown", "unavailable"):
-                try:
-                    forecast_today = float(forecast_state.state) * 0.85
-                    if self.household_consumption_sensor and self._solar_production_accumulator > 0:
-                        remaining_solar_kwh = max(0.0, forecast_today - self._solar_production_accumulator)
-                    elif self._solar_t_start is not None:
-                        t_end = self._consumption_tracker.estimate_t_end()
-                        fraction_done = self._consumption_tracker.get_solar_fraction_done(now_h, self._solar_t_start, t_end)
-                        remaining_solar_kwh = forecast_today * (1.0 - fraction_done)
-                except (ValueError, TypeError):
-                    pass
-
-        # Subtract remaining house consumption from remaining solar (solar not available for battery)
-        if self._solar_t_start is not None:
-            t_end = self._consumption_tracker.estimate_t_end()
-            daylight_h = max(0.0, t_end - self._solar_t_start)
-            hours_to_t_end = max(0.0, t_end - now_h)
-            if daylight_h > 0:
-                avg_consumption_kwh = self._consumption_tracker.get_avg_daily_consumption()
-                remaining_consumption_kwh = (avg_consumption_kwh / daylight_h) * hours_to_t_end
-                remaining_solar_kwh = max(0.0, remaining_solar_kwh - remaining_consumption_kwh)
-
-        # --- Net deficit ---
-        # Apply the configurable grid-charge margin so optimistic solar forecasts
-        # are hedged by booking extra cheap grid slots. Capped at energy_to_full.
-        margin_factor = 1.0 + self._predictive_grid_charge_margin_pct / 100.0
-        evening_deficit_kwh = min(
-            energy_to_full_kwh,
-            max(0.0, energy_to_full_kwh - remaining_solar_kwh) * margin_factor,
-        )
-
-        if evening_deficit_kwh < EVENING_DEFICIT_THRESHOLD_KWH:
-            _LOGGER.info(
-                "Evening recharge: remaining solar sufficient "
-                "(to_full=%.2f kWh, solar_remaining=%.2f kWh) — no action",
-                energy_to_full_kwh, remaining_solar_kwh,
-            )
-            return
-
-        _LOGGER.info(
-            "Evening recharge: deficit %.2f kWh (to_full=%.2f, solar_remaining=%.2f) "
-            "— searching for cheap slots",
-            evening_deficit_kwh, energy_to_full_kwh, remaining_solar_kwh,
-        )
-
-        # --- Find cheap slots (extended horizon: now + 12h to capture cheap overnight slots) ---
-        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=0)
-        slots = self._parse_price_data(horizon_end=max(end_of_day, now + timedelta(hours=12)))
-        if not slots:
-            _LOGGER.warning("Evening recharge: no price data available")
-            return
-
-        # Exclude slots already in the morning schedule
-        if self._dynamic_pricing_schedule:
-            scheduled_starts = {s.start for s in self._dynamic_pricing_schedule.selected_slots}
-            slots = [s for s in slots if s.start not in scheduled_starts]
-
-        if not slots:
-            _LOGGER.info("Evening recharge: no additional slots available (all already scheduled)")
-            return
-
-        hours_needed = self._calculate_charging_hours_needed(evening_deficit_kwh)
-        selected = self._select_cheapest_hours(slots, hours_needed)
-
-        if not selected:
-            _LOGGER.warning("Evening recharge: no slots below price threshold")
-            return
-
-        # --- Merge into schedule ---
-        if self._dynamic_pricing_schedule:
-            merged = sorted(
-                self._dynamic_pricing_schedule.selected_slots + selected,
-                key=lambda s: s.start,
-            )
-            self._dynamic_pricing_schedule.selected_slots = merged
-            self._dynamic_pricing_schedule.charging_needed = True
-            self._dynamic_pricing_evaluated_date = max(s.start.date() for s in merged)
-        else:
-            avg_price = sum(s.price for s in selected) / len(selected)
-            effective_power_kw = min(self.max_contracted_power, self.max_charge_capacity) / 1000.0
-            self._dynamic_pricing_schedule = DynamicPricingSchedule(
-                hours_needed=hours_needed,
-                selected_slots=selected,
-                average_price=avg_price,
-                estimated_cost=avg_price * effective_power_kw * hours_needed,
-                total_available_slots=len(slots),
-                evaluation_time=now,
-                energy_deficit_kwh=evening_deficit_kwh,
-                charging_needed=True,
-            )
-            self._dynamic_pricing_evaluated_date = max(s.start.date() for s in selected)
-
-        _LOGGER.info(
-            "Evening recharge: scheduled %d slot(s) (%.1fh) for %.2f kWh deficit",
-            len(selected), hours_needed, evening_deficit_kwh,
-        )
-        await self._send_evening_recharge_notification(evening_deficit_kwh, selected)
-
-    async def _send_evening_recharge_notification(
-        self, deficit_kwh: float, slots: list
-    ) -> None:
-        """Send notification for the evening re-evaluation result."""
-        slots_str = ", ".join(
-            f"{s.start.strftime('%H:%M')}-{s.end.strftime('%H:%M')} ({s.price:.4f} {self._get_price_unit()})"
-            for s in slots
-        )
-        avg_soc = sum(
-            (c.data.get("battery_soc", 0) or 0)
-            for c in self.coordinators if c.data
-        ) / max(1, sum(1 for c in self.coordinators if c.data))
-        message = (
-            f"☀️ Solar ending — batteries not full ({avg_soc:.0f}% avg)\n"
-            f"⚡ Deficit: {deficit_kwh:.2f} kWh\n\n"
-            f"Cheap slots scheduled:\n{slots_str}"
-        )
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": "Predictive Charging: Evening re-evaluation",
-                "message": message,
-                "notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evening_reeval",
-            },
-        )
+        """Delegates to PricingManager (read by binary_sensor.py)."""
+        return self._pricing_mgr.is_in_dynamic_pricing_slot()
 
     async def _handle_dynamic_pricing_predictive_charging(self) -> None:
-        """Handle predictive charging in dynamic pricing mode (called every 2.5s)."""
-        now = datetime.now()
-
-        # Phase 1: Evaluation at 23:00
-        if self._is_dynamic_pricing_evaluation_time():
-            await self._evaluate_dynamic_pricing()
-            return
-
-        # Phase 2: Retry if prices weren't available at 00:05 (e.g. sensor update delay)
-        if (
-            self._dynamic_pricing_evaluated_date != now.date()
-            and self._dp_eval_retry_count > 0
-            and self._dp_eval_retry_count < 5
-            and now.hour == 0  # Only retry within the first hour of the day
-        ):
-            # Retry every 15 min starting from 00:05
-            retry_minute = now.minute
-            expected_retry_minute = 5 + self._dp_eval_retry_count * 15
-            if abs(retry_minute - expected_retry_minute) <= 2:
-                _LOGGER.info("Dynamic pricing: retrying evaluation (attempt %d)", self._dp_eval_retry_count + 1)
-                await self._evaluate_dynamic_pricing()
-                return
-
-        # Phase 2.5: Pre-slot re-evaluation (1h before each upcoming slot)
-        await self._check_dp_pre_slot_reevaluation()
-
-        # Phase 2.6: Evening re-evaluation when solar is winding down
-        if self._is_evening_reevaluation_time():
-            await self._evaluate_evening_recharge()
-
-        # Phase 3: Daily reset at midnight
-        today = now.date()
-        if self._dynamic_pricing_evaluated_date is not None:
-            if today > self._dynamic_pricing_evaluated_date:
-                _LOGGER.info("Dynamic pricing: new day — resetting schedule")
-                self._dynamic_pricing_schedule = None
-                self._dynamic_pricing_evaluated_date = None
-                self._current_price_slot_active = False
-                self._dp_eval_retry_count = 0
-                self._dp_pre_evaluated_slots = {}
-                self._dp_daily_avg_price = None
-                self._dp_evening_reevaluated_date = None
-
-        # Phase 4: Check if we're in a selected cheap slot
-        if self._dynamic_pricing_schedule and not self.predictive_charging_overridden:
-            in_slot = self._is_in_dynamic_pricing_slot()
-
-            if in_slot and not self._current_price_slot_active:
-                # Informational schedule only — no grid charging needed
-                if not self._dynamic_pricing_schedule.charging_needed:
-                    _LOGGER.debug(
-                        "Dynamic pricing: inside cheap slot window but charging not needed "
-                        "(solar/battery sufficient) — skipping"
-                    )
-                    # Fall through to discharge control below (do not return early)
-
-                # Respect charge delay: if configured and still active, hold until it unlocks
-                elif self.is_charge_blocked():
-                    _LOGGER.info(
-                        "Dynamic pricing: inside cheap slot window but charge delay is active — holding"
-                    )
-                    # Fall through to discharge control below (do not return early)
-
-                else:
-                    # Find which slot we're entering
-                    current_slot = next(
-                        (s for s in self._dynamic_pricing_schedule.selected_slots if s.start <= now < s.end),
-                        None
-                    )
-
-                    # Skip if pre-evaluation decided charging is no longer needed for this slot
-                    if current_slot and self._dp_pre_evaluated_slots.get(current_slot.start) is False:
-                        _LOGGER.info(
-                            "Dynamic pricing: skipping slot %s — pre-evaluation found sufficient energy",
-                            current_slot.start.strftime("%H:%M")
-                        )
-                        # Fall through to discharge control below (do not return early)
-
-                    else:
-                        # Entering a cheap slot
-                        self._current_price_slot_active = True
-                        self._grid_charging_initialized = False
-                        self.grid_charging_active = True
-                        if current_slot:
-                            await self._send_dynamic_pricing_slot_start_notification(current_slot)
-                        _LOGGER.info(
-                            "Dynamic pricing: entering cheap slot %s",
-                            current_slot.start.strftime("%H:%M") if current_slot else "unknown"
-                        )
-
-            elif not in_slot and self._current_price_slot_active:
-                # Exiting a cheap slot
-                self._current_price_slot_active = False
-                self._grid_charging_initialized = False
-                self.grid_charging_active = False
-                self.previous_power = 0
-                self.previous_error = 0
-                _LOGGER.info("Dynamic pricing: exiting cheap slot — resuming normal control")
-
-            if self._current_price_slot_active:
-                await self._handle_predictive_grid_charging()
-                return
-
-        # Phase 5: Override active — resume normal PD control
-        if self.predictive_charging_overridden:
-            if self.grid_charging_active:
-                self.grid_charging_active = False
-                self._grid_charging_initialized = False
-                self._current_price_slot_active = False
-                self.first_execution = True
-
-        # Not in a cheap slot — fall through to normal PD control (no return here)
-        # Note: ``_price_based_discharge_blocked`` is computed centrally in
-        # ``async_update_charge_discharge`` via ``_apply_price_discharge_block``
-        # before this handler runs, so the early ``return`` at the cheap-slot path
-        # above does not leave it unset for downstream enforcement.
-
-    # =========================================================================
-    # REAL-TIME PRICE: reactive charging based on current price every cycle
-    # =========================================================================
+        """Delegates to PricingManager.handle_dynamic_pricing_predictive_charging."""
+        await self._pricing_mgr.handle_dynamic_pricing_predictive_charging()
 
     async def _handle_realtime_price_predictive_charging(self) -> None:
-        """Handle predictive charging in real-time price mode (called every 2.5s).
-
-        Reads the current price every cycle and activates/deactivates grid charging
-        immediately when the price crosses the threshold, with no pre-scheduling.
-        If an average_price_sensor is configured its value is used as the threshold
-        instead of the fixed max_price_threshold.
-        """
-        current_price = self._get_current_price()
-        if current_price is None:
-            _LOGGER.debug("Real-time price: price sensor %s unavailable", self.price_sensor)
-            if self._realtime_price_charging:
-                self._realtime_price_charging = False
-                self.grid_charging_active = False
-                self._grid_charging_initialized = False
-                self.previous_power = 0
-                self.previous_error = 0
-            return
-
-        # Determine threshold: average sensor if configured, else fixed threshold
-        threshold = None
-        if self.average_price_sensor:
-            avg_state = self.hass.states.get(self.average_price_sensor)
-            if avg_state is not None:
-                try:
-                    threshold = float(avg_state.state)
-                except (ValueError, TypeError):
-                    pass
-        if threshold is None:
-            threshold = self.max_price_threshold
-
-        if threshold is None:
-            _LOGGER.debug("Real-time price: no threshold configured, skipping")
-            return
-
-        # Override active — stop any active charging and do not start new
-        if self.predictive_charging_overridden:
-            if self._realtime_price_charging or self.grid_charging_active:
-                self._realtime_price_charging = False
-                self.grid_charging_active = False
-                self._grid_charging_initialized = False
-                self.previous_power = 0
-                self.previous_error = 0
-            return
-
-        price_is_cheap = current_price <= threshold
-        _LOGGER.debug(
-            "Real-time price: current=%.4f threshold=%.4f cheap=%s charging=%s",
-            current_price, threshold, price_is_cheap, self._realtime_price_charging,
-        )
-
-        # Note: ``_price_based_discharge_blocked`` is set in
-        # ``async_update_charge_discharge`` via ``_apply_price_discharge_block``
-        # before this handler runs, so any early ``return`` above does not skip it.
-
-        if price_is_cheap and not self._realtime_price_charging:
-            if not self._is_operation_allowed(is_charging=True):
-                if self.charge_delay_enabled and self._charge_delay_mgr.is_charge_delayed():
-                    reason = "charge delay active"
-                else:
-                    reason = "time slot configuration"
-                _LOGGER.debug(
-                    "Real-time price: cheap price but charging NOT ALLOWED by %s",
-                    reason,
-                )
-            else:
-                # Evaluate whether charging is actually needed before starting
-                decision_data = await self._should_activate_grid_charging()
-                self._last_decision_data = decision_data
-                if decision_data["should_charge"]:
-                    self._realtime_price_charging = True
-                    self._grid_charging_initialized = False
-                    self.grid_charging_active = True
-                    _LOGGER.info(
-                        "Real-time price: charging STARTED (price=%.4f <= threshold=%.4f)",
-                        current_price, threshold,
-                    )
-                else:
-                    _LOGGER.info(
-                        "Real-time price: cheap price but charging NOT needed (sufficient energy)",
-                    )
-
-        elif not price_is_cheap and self._realtime_price_charging:
-            self._realtime_price_charging = False
-            self.grid_charging_active = False
-            self._grid_charging_initialized = False
-            self.previous_power = 0
-            self.previous_error = 0
-            _LOGGER.info(
-                "Real-time price: charging STOPPED (price=%.4f > threshold=%.4f)",
-                current_price, threshold,
-            )
-
-        if self.grid_charging_active:
-            if not self._is_operation_allowed(is_charging=True):
-                # Time slot ended while charging was active — stop immediately
-                self._realtime_price_charging = False
-                self.grid_charging_active = False
-                self._grid_charging_initialized = False
-                self.previous_power = 0
-                self.previous_error = 0
-                _LOGGER.debug(
-                    "Real-time price: charging stopped — outside charge time slot",
-                )
-                return
-            await self._handle_predictive_grid_charging()
+        """Delegates to PricingManager.handle_realtime_price_predictive_charging."""
+        await self._pricing_mgr.handle_realtime_price_predictive_charging()
 
     # =========================================================================
-    # TIME SLOT: extracted handler
+    # TIME SLOT: delegator to PricingManager
     # =========================================================================
 
     async def _handle_time_slot_predictive_charging(self) -> None:
-        """Handle predictive charging in time slot mode (extracted from main loop)."""
-        # Check if we're in the actual time slot
-        in_time_window = (
-            self.charging_time_slot is not None and
-            self._check_time_window()
-        )
+        """Delegates to PricingManager.handle_time_slot_predictive_charging."""
+        await self._pricing_mgr.handle_time_slot_predictive_charging()
 
-        if in_time_window:
-            if self.predictive_charging_overridden:
-                _LOGGER.debug("Predictive charging overridden by user - continuing normal operation")
-                if self.grid_charging_active:
-                    self.grid_charging_active = False
-                    self._grid_charging_initialized = False
-                    self.first_execution = True
-                return
-
-            current_avg_soc = sum(c.data.get("battery_soc", 0) for c in self.coordinators if c.data) / len(self.coordinators)
-            is_initial_eval = self.last_evaluation_soc is None
-
-            # On slot entry, wait 5 minutes before the initial evaluation so the
-            # forecast sensor (which resets at midnight) has time to update.
-            if is_initial_eval:
-                if self._slot_entry_time is None:
-                    self._slot_entry_time = datetime.now()
-                    _LOGGER.info(
-                        "Time slot entered (SOC: %.1f%%) — waiting 5 min before evaluation "
-                        "to allow forecast sensor to update",
-                        current_avg_soc,
-                    )
-                wait_elapsed_s = (datetime.now() - self._slot_entry_time).total_seconds()
-                if wait_elapsed_s < 5 * 60:
-                    _LOGGER.debug(
-                        "Predictive charging: waiting for forecast sensor (%.0f / 300 s) - normal operation continues",
-                        wait_elapsed_s,
-                    )
-                    return
-
-            should_reevaluate = (
-                is_initial_eval or
-                abs(current_avg_soc - self.last_evaluation_soc) >= SOC_REEVALUATION_THRESHOLD
-            )
-
-            if should_reevaluate:
-                if is_initial_eval:
-                    _LOGGER.info("INITIAL evaluation of predictive grid charging (SOC: %.1f%%)", current_avg_soc)
-                else:
-                    _LOGGER.info("RE-EVALUATING predictive grid charging due to SOC drop (%.1f%% -> %.1f%%)",
-                                self.last_evaluation_soc, current_avg_soc)
-
-                decision_data = await self._should_activate_grid_charging()
-                self.grid_charging_active = decision_data["should_charge"]
-                self.last_evaluation_soc = current_avg_soc
-                self._last_decision_data = decision_data
-
-                if is_initial_eval:
-                    await self._send_predictive_charging_notification(
-                        decision_data=decision_data
-                    )
-
-            if self.grid_charging_active:
-                _LOGGER.info("Predictive Grid Charging ACTIVE - target power: %dW", self.max_contracted_power)
-                await self._handle_predictive_grid_charging()
-                return
-            else:
-                _LOGGER.info("In predictive charging slot but charging not needed - continuing normal operation")
-                return
-        else:
-            if self.grid_charging_active or self._grid_charging_initialized:
-                _LOGGER.info("Exiting predictive grid charging slot - returning to normal mode")
-                self.grid_charging_active = False
-                self.last_evaluation_soc = None
-                self._grid_charging_initialized = False
-                self.error_integral = 0.0
-                self.previous_error = 0.0
-                self.sign_changes = 0
-                await self.hass.services.async_call(
-                    "persistent_notification",
-                    "dismiss",
-                    {"notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evaluation"},
-                )
-
-            self._slot_entry_time = None
-
-    async def _send_predictive_charging_notification(
-        self,
-        decision_data: dict,
-        is_daily_evaluation: bool = False,
-    ):
-        """Send notification about predictive charging evaluation result.
-
-        Args:
-            decision_data: Dict from _should_activate_grid_charging() with decision factors
-            is_daily_evaluation: True when called from daily evaluation in automation_slots mode
-        """
-        # Format the notification using the helper method
-        title, message = self._format_predictive_notification_message(
-            decision_data, is_daily_evaluation
-        )
-
-        # Send the notification
-        await self.hass.services.async_call(
-            "persistent_notification",
-            "create",
-            {
-                "title": title,
-                "message": message,
-                "notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_evaluation",
-            },
-        )
-    
     def _apply_price_discharge_block(self) -> None:
-        """Set ``_price_based_discharge_blocked`` from current price vs threshold.
-
-        Centralised so the flag is set every cycle BEFORE mode dispatch — even when
-        the mode handler returns early (override active, DP cheap-slot active,
-        max_soc transition, etc.). Previously the flag was set inside each handler
-        and any early ``return`` left it at the cycle-start ``False`` reset, letting
-        PD discharge under cheap prices.
-        """
-        mode = self.predictive_charging_mode
-
-        if mode == PREDICTIVE_MODE_DYNAMIC_PRICING:
-            if not self.dp_price_discharge_control or not self.price_sensor:
-                self.remove_discharge_block("price_discharge")
-                return
-        elif mode == PREDICTIVE_MODE_REALTIME_PRICE:
-            if not self.rt_price_discharge_control or not self.price_sensor:
-                self.remove_discharge_block("price_discharge")
-                return
-        else:
-            self.remove_discharge_block("price_discharge")
-            return
-
-        # Reactive per-cycle price check. DP uses the configured fixed threshold
-        # when present, otherwise the daily slot average. RT keeps its explicit
-        # average-sensor vs fixed-threshold behaviour.
-        # DP no longer relies on selected_slots membership for the
-        # discharge decision — the slot list governs grid-charging only.
-        # This eliminates the post-restart and post-midnight blind windows
-        # where _dynamic_pricing_schedule is None.
-        threshold = None
-        if mode == PREDICTIVE_MODE_DYNAMIC_PRICING:
-            threshold = self.max_price_threshold
-            if threshold is None:
-                threshold = self._dp_daily_avg_price
-        elif self.average_price_sensor:
-            avg_state = self.hass.states.get(self.average_price_sensor)
-            if avg_state is not None:
-                try:
-                    threshold = float(avg_state.state)
-                except (ValueError, TypeError):
-                    pass
-        if threshold is None and mode == PREDICTIVE_MODE_REALTIME_PRICE:
-            threshold = self.max_price_threshold
-
-        if threshold is None:
-            self.remove_discharge_block("price_discharge")
-            return
-
-        current_price = self._get_current_price()
-        if current_price is None:
-            self.remove_discharge_block("price_discharge")
-            return
-
-        if current_price > threshold:
-            self.remove_discharge_block("price_discharge")
-            self._price_based_discharge_blocked = False
-            return
-
-        self.set_discharge_block(
-            "price_discharge",
-            "price",
-            {"current_price": current_price, "threshold": threshold, "mode": mode},
-        )
-        self._price_based_discharge_blocked = True
-        if self._price_based_discharge_blocked:
-            _LOGGER.debug(
-                "Price-based discharge BLOCKED (current=%.4f <= threshold=%.4f, mode=%s)",
-                current_price, threshold, mode,
-            )
+        """Delegates to PricingManager.apply_price_discharge_block (called every control cycle)."""
+        self._pricing_mgr.apply_price_discharge_block()
 
     async def _stop_all_batteries_for_block(self, direction: str) -> None:
         """Stop all battery commands after a global operation block becomes active."""
@@ -4767,7 +3241,6 @@ class ChargeDischargeController:
         if self._consumption_tracker is not None:
             self._consumption_tracker.handle_accumulator_daily_reset()
             await self._consumption_tracker.accumulate_household_consumption()
-            await self._consumption_tracker.accumulate_solar_production()
             # Exact full-day totals from the real power sensors (panel "Energía hoy")
             self._consumption_tracker.handle_daily_energy_reset()
             await self._consumption_tracker.accumulate_daily_solar_energy()
@@ -5741,8 +4214,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     v4 -> v5: re-enable cell voltage sensors that the integration disabled before
               they were switched to enabled_by_default. Only re-enables entities
               disabled by the integration, leaving user-disabled ones untouched.
+    v5 -> v6: drop the legacy household_consumption_sensor key. It was removed from
+              the config flow; home consumption is now always derived (grid +
+              battery AC + solar). Leaving it in data let it keep driving consumption
+              calculations on old installs.
     """
-    if entry.version >= 5:
+    if entry.version >= 6:
         return True
 
     new_data = dict(entry.data)
@@ -5835,7 +4312,15 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             count,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=5)
+    if entry.version < 6:
+        if new_data.pop(CONF_HOUSEHOLD_CONSUMPTION_SENSOR, None) is not None:
+            _LOGGER.info(
+                "Marstek: migrated config entry to version 6 "
+                "(removed legacy household_consumption_sensor; home consumption is "
+                "now always derived from grid + battery AC + solar)"
+            )
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=6)
     return True
 
 

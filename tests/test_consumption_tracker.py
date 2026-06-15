@@ -19,6 +19,7 @@ from custom_components.marstek_venus_energy_manager.const import (
 from custom_components.marstek_venus_energy_manager.consumption_tracker import (
     ConsumptionTracker,
 )
+from tests.conftest import FakeCoordinator
 
 
 # ----------------------------------------------------------------------
@@ -125,8 +126,12 @@ def _make_solar_tracker(states, solar_sensor, coordinators):
     return tracker
 
 
-def _vunit(version, mppt_total):
-    return SimpleNamespace(battery_version=version, data={"mppt1_power": mppt_total})
+def _vunit(version, mppt_total, available=True):
+    return FakeCoordinator(
+        battery_version=version,
+        data={"mppt1_power": mppt_total},
+        is_available=available,
+    )
 
 
 def test_total_solar_external_only():
@@ -156,3 +161,60 @@ def test_total_solar_ignores_non_pv_versions():
 def test_total_solar_none_when_no_source():
     tracker = _make_solar_tracker({}, None, [])
     assert tracker._read_total_solar_power_kw() is None
+
+
+def test_total_solar_skips_disconnected_unit():
+    # A disconnected unit keeps its last MPPT reading (coordinator.data is merged,
+    # never expired). It must not be counted, or the daily solar total inflates.
+    tracker = _make_solar_tracker(
+        {}, None, [_vunit("vA", 800, available=False)]
+    )
+    assert tracker._read_total_solar_power_kw() is None
+
+
+def test_total_solar_counts_only_connected_units():
+    tracker = _make_solar_tracker(
+        {}, None, [_vunit("vA", 800), _vunit("vD", 500, available=False)]
+    )
+    assert tracker._read_total_solar_power_kw() == pytest.approx(0.8)
+
+
+# ----------------------------------------------------------------------
+# Derived home power: home = grid + sum(ac_power) + external_solar.
+# Pins the stale-battery fix — a unit that drops mid-discharge keeps a frozen
+# ac_power in coordinator.data; counting it double-books the load the grid
+# meter already shows, inflating home consumption and its daily integral.
+# ----------------------------------------------------------------------
+
+def _battunit(ac_w, available=True):
+    return FakeCoordinator(data={"ac_power": ac_w}, is_available=available)
+
+
+def _make_home_tracker(states, coordinators, grid_sensor="sensor.grid", solar_sensor=None):
+    tracker = ConsumptionTracker.__new__(ConsumptionTracker)
+    tracker._hass = SimpleNamespace(states=_FakeStates(states))
+    tracker._controller = SimpleNamespace(
+        consumption_sensor=grid_sensor,
+        solar_production_sensor=solar_sensor,
+        coordinators=coordinators,
+    )
+    return tracker
+
+
+def test_derive_home_counts_connected_discharge():
+    # Grid imports 300 W, battery discharges 2500 W (positive ac_power): the
+    # battery covers most of a 2.8 kW house load.
+    tracker = _make_home_tracker(
+        {"sensor.grid": _w(300)}, [_battunit(2500)]
+    )
+    assert tracker._derive_home_power_kw() == pytest.approx(2.8)
+
+
+def test_derive_home_skips_disconnected_stale_discharge():
+    # Same battery dropped mid-discharge: ac_power frozen at 2500, but its load
+    # has shifted onto the grid meter (now 2800 W). Counting the stale 2500 would
+    # report 5.3 kW; skipping it gives the true 2.8 kW.
+    tracker = _make_home_tracker(
+        {"sensor.grid": _w(2800)}, [_battunit(2500, available=False)]
+    )
+    assert tracker._derive_home_power_kw() == pytest.approx(2.8)
