@@ -4332,9 +4332,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
               the config flow; home consumption is now always derived (grid +
               battery AC + solar). Leaving it in data let it keep driving consumption
               calculations on old installs.
-    v6 -> v7: fix Home Consumption aggregate sensor unique_id from the incorrect
+    v6 -> v7: fix the Home Consumption aggregate sensor from the incorrect
               marstek_venus_system_system_home_consumption (double "system") to
-              marstek_venus_system_home_consumption.
+              marstek_venus_system_home_consumption. Renames both the unique_id
+              and the registry entity_id (the entity_id is not derived from the
+              unique_id, so it must be renamed explicitly).
     """
     if entry.version >= 7:
         return True
@@ -4447,9 +4449,20 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return None
 
         await er.async_migrate_entries(hass, entry.entry_id, _fix_home_consumption_uid)
+
+        # Renaming the unique_id does not change the registry entity_id (HA keeps
+        # them separate), so rename it explicitly too — otherwise the entity keeps
+        # the double-"system" id and the dashboard Home node stays unavailable.
+        # Skip if the target id is already taken (e.g. the user renamed it by hand).
+        ent_reg = er.async_get(hass)
+        old_eid = "sensor.marstek_venus_system_system_home_consumption"
+        new_eid = "sensor.marstek_venus_system_home_consumption"
+        if ent_reg.async_get(old_eid) is not None and ent_reg.async_get(new_eid) is None:
+            ent_reg.async_update_entity(old_eid, new_entity_id=new_eid)
+
         _LOGGER.info(
             "Marstek: migrated config entry to version 7 "
-            "(fixed Home Consumption sensor unique_id: removed duplicate 'system' prefix)"
+            "(fixed Home Consumption sensor unique_id + entity_id: removed duplicate 'system' prefix)"
         )
 
     hass.config_entries.async_update_entry(entry, data=new_data, version=7)
