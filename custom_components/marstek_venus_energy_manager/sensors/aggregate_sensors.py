@@ -477,7 +477,10 @@ class MarstekVenusAggregateSensor(SensorEntity):
             # dropped mid-discharge would keep adding a phantom contribution while
             # the grid meter already shows its load — double-counting it here.
             if coordinator.is_available and coordinator.data:
-                ac = coordinator.data.get("ac_power")
+                # Registerless drivers (e.g. Zendure) expose no ac_power; fall
+                # back to −battery_power so their discharge is not dropped from
+                # the home total (mirrors the charge/discharge aggregates).
+                ac = self._ac_convention_power(coordinator.data)
                 if ac is not None:
                     total += ac
 

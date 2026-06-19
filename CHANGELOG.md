@@ -2,6 +2,9 @@
 
 ## [2.1.0] - 2026-06-15
 
+### Fixed
+- **Home Consumption dropped registerless-driver (Zendure) discharge**: the aggregate summed only `ac_power`, so a Zendure (which exposes only `battery_power`) was missing from Home Consumption — undercounting it and collapsing the dashboard Energy Flow Home node toward 0 once an excluded device was subtracted. Now reuses the `_ac_convention_power` fallback (−`battery_power`), matching the charge/discharge aggregates. [`sensors/aggregate_sensors.py`](custom_components/marstek_venus_energy_manager/sensors/aggregate_sensors.py).
+
 ### Internal
 - **Source reorganisation into subpackages**: moved 18 modules out of the integration root into four subpackages — [`sensors/`](custom_components/marstek_venus_energy_manager/sensors/), [`control/`](custom_components/marstek_venus_energy_manager/control/), [`tracking/`](custom_components/marstek_venus_energy_manager/tracking/), [`infra/`](custom_components/marstek_venus_energy_manager/infra/). Root now contains only the HA-required platform files. No behaviour change.
 - **Driver abstraction — coordinator reads via the driver**: the coordinator now builds a `MarstekModbusDriver` and routes its connection lifecycle (connect/close/reconnect/shutdown) and per-register polling through it instead of touching the Modbus client directly; writes and block reads still use the client until a later phase. Behavior unchanged. [`coordinator.py`](custom_components/marstek_venus_energy_manager/coordinator.py), [`drivers/`](custom_components/marstek_venus_energy_manager/drivers/).
