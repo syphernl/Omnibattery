@@ -434,6 +434,7 @@ class SyntheticEnergySensor(CoordinatorEntity, RestoreEntity, SensorEntity):
         self._attr_suggested_display_precision = definition.get("precision")
         self._attr_should_poll = False
 
+        self._key = definition["key"]
         self._direction = definition["direction"]       # "charge" / "discharge"
         self._daily = definition["period"] == "daily"
         self._precision = definition.get("precision", 2)
@@ -472,10 +473,26 @@ class SyntheticEnergySensor(CoordinatorEntity, RestoreEntity, SensorEntity):
                 self._kwh = 0.0
             self._reset_date = today
 
+        # Seed the running total into coordinator.data immediately so the cycle /
+        # efficiency sensors can read it before the first poll re-publishes it.
+        self._publish_total()
+
+    def _publish_total(self) -> None:
+        """Expose the running total in coordinator.data.
+
+        The cycle and round-trip-efficiency sensors read coordinator.data, not
+        this entity, so without this the synthesised totals stay invisible to
+        them (cycles pinned at 0, efficiency at unknown). The coordinator mutates
+        its data dict in place each poll, so the key persists between refreshes.
+        """
+        if self.coordinator.data is not None:
+            self.coordinator.data[self._key] = self._kwh
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Integrate battery_power on each coordinator update, then write state."""
         self._accumulate()
+        self._publish_total()
         super()._handle_coordinator_update()
 
     def _accumulate(self) -> None:

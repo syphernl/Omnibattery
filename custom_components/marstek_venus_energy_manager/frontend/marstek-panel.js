@@ -3082,7 +3082,10 @@ class MarstekVenusPanel extends HTMLElement {
     top.appendChild(pw);
     // click SOC ring / power / capacity -> more-info (history graph)
     this._linkMoreInfo(ring.ring, b.entIds[K.batterySoc]);
-    this._linkMoreInfo(pw.querySelector(".bat-pwr"), b.entIds[K.acPower]);
+    // Power source mirrors the value shown (powerW): ac_power on Marstek,
+    // battery_power on Zendure (no ac_power). Link the one that exists so the
+    // click opens its history instead of no-opping on a missing entity.
+    this._linkMoreInfo(pw.querySelector(".bat-pwr"), b.entIds[K.acPower] || b.entIds[K.batteryPower]);
     this._linkMoreInfo(pw.querySelector(".bat-cap"), b.entIds[K.storedEnergy]);
     card.appendChild(top);
 
