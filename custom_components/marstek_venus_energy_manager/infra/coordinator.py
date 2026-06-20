@@ -143,11 +143,16 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
         # per-platform definition lists back from it (see the passthrough
         # properties below) instead of branching on the version string.
         if self.brand == "zendure":
+            # Zendure's charge/discharge caps are read-only device traits, not
+            # writable registers. The capability must stay the hardware ceiling
+            # (driver default) — feeding the user-tunable max_charge_power here
+            # would trap the soft-max slider's native_max at the saved value and
+            # re-clamp the apply path below it. The user's runtime ceiling is
+            # enforced via coordinator.max_charge_power instead (soft-max entity
+            # + device chargeMaxLimit sync).
             self.driver = ZendureLocalDriver(
                 self.host,
                 port=self.port,
-                max_charge_power_w=self.max_charge_power,
-                max_discharge_power_w=self.max_discharge_power,
             )
         else:
             self.driver = MarstekModbusDriver(

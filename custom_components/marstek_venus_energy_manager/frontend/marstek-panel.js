@@ -44,7 +44,7 @@ const I18N = {
     tabResumen: "Overview", tabBaterias: "Batteries", tabControl: "Control",
     moreInfo: "Show history",
     zoomReset: "All",
-    infoSoftware: "Software", infoSerial: "Serial",
+    infoModel: "Model", infoSoftware: "Software", infoSerial: "Serial",
     placeholderMsg: "This view is coming in a future phase. For now, use the Overview view.",
     cardFlow: "Energy flow", cardSoc: "System status", cardDaily: "Energy today",
     cardWeekly: "Weekly energy", cardPower: "Power", cardSocToday: "SOC · today",
@@ -104,7 +104,7 @@ const I18N = {
     tabResumen: "Resumen", tabBaterias: "Baterías", tabControl: "Control",
     moreInfo: "Ver histórico",
     zoomReset: "Todo",
-    infoSoftware: "Software", infoSerial: "N.º serie",
+    infoModel: "Modelo", infoSoftware: "Software", infoSerial: "N.º serie",
     placeholderMsg: "Esta vista llegará en una próxima fase. Por ahora, usa la vista Resumen.",
     cardFlow: "Flujo de energía", cardSoc: "Estado del sistema", cardDaily: "Energía hoy",
     cardWeekly: "Energía semanal", cardPower: "Potencias", cardSocToday: "SOC · hoy",
@@ -164,7 +164,7 @@ const I18N = {
     tabResumen: "Resum", tabBaterias: "Bateries", tabControl: "Control",
     moreInfo: "Veure històric",
     zoomReset: "Tot",
-    infoSoftware: "Programari", infoSerial: "Núm. sèrie",
+    infoModel: "Model", infoSoftware: "Programari", infoSerial: "Núm. sèrie",
     placeholderMsg: "Aquesta vista arribarà en una fase futura. De moment, fes servir la vista Resum.",
     cardFlow: "Flux d'energia", cardSoc: "Estat del sistema", cardDaily: "Energia avui",
     cardWeekly: "Energia setmanal", cardPower: "Potències", cardSocToday: "SOC · avui",
@@ -224,7 +224,7 @@ const I18N = {
     tabResumen: "Übersicht", tabBaterias: "Batterien", tabControl: "Steuerung",
     moreInfo: "Verlauf anzeigen",
     zoomReset: "Alles",
-    infoSoftware: "Software", infoSerial: "Seriennr.",
+    infoModel: "Modell", infoSoftware: "Software", infoSerial: "Seriennr.",
     placeholderMsg: "Diese Ansicht kommt in einer späteren Phase. Nutze vorerst die Übersicht.",
     cardFlow: "Energiefluss", cardSoc: "Systemstatus", cardDaily: "Energie heute",
     cardWeekly: "Wochenenergie", cardPower: "Leistung", cardSocToday: "SOC · heute",
@@ -284,7 +284,7 @@ const I18N = {
     tabResumen: "Résumé", tabBaterias: "Batteries", tabControl: "Contrôle",
     moreInfo: "Voir l'historique",
     zoomReset: "Tout",
-    infoSoftware: "Logiciel", infoSerial: "N° série",
+    infoModel: "Modèle", infoSoftware: "Logiciel", infoSerial: "N° série",
     placeholderMsg: "Cette vue arrivera dans une phase ultérieure. Pour l'instant, utilisez la vue Résumé.",
     cardFlow: "Flux d'énergie", cardSoc: "État du système", cardDaily: "Énergie aujourd'hui",
     cardWeekly: "Énergie hebdomadaire", cardPower: "Puissances", cardSocToday: "SOC · aujourd'hui",
@@ -344,7 +344,7 @@ const I18N = {
     tabResumen: "Overzicht", tabBaterias: "Batterijen", tabControl: "Bediening",
     moreInfo: "Geschiedenis tonen",
     zoomReset: "Alles",
-    infoSoftware: "Software", infoSerial: "Serienr.",
+    infoModel: "Model", infoSoftware: "Software", infoSerial: "Serienr.",
     placeholderMsg: "Deze weergave komt in een latere fase. Gebruik voorlopig het Overzicht.",
     cardFlow: "Energiestroom", cardSoc: "Systeemstatus", cardDaily: "Energie vandaag",
     cardWeekly: "Energie per week", cardPower: "Vermogen", cardSocToday: "SOC · vandaag",
@@ -501,18 +501,20 @@ const DELTA_MV_RED = 250;
 const BAT_CONTROLS = [
   { key: "battery_allow_charge", domain: "switch", lk: "bcAllowCharge", icon: "mdi:battery-arrow-up" },
   { key: "battery_allow_discharge", domain: "switch", lk: "bcAllowDischarge", icon: "mdi:battery-arrow-down" },
+  // SOC limits: the Marstek register and its Zendure equivalent share each label;
+  // only one of each pair exists on a given device, so both layouts read
+  // "SOC máximo" then "SOC mínimo" in this order.
   { key: "charging_cutoff_capacity", domain: "number", lk: "bcSocMax", icon: "mdi:battery-high" },
-  { key: "discharging_cutoff_capacity", domain: "number", lk: "bcSocMin", icon: "mdi:battery-low" },
-  // Zendure SOC + inverter-output controls (no Marstek equivalent register; reuse
-  // the same labels — only one of each pair ever exists on a given device).
   { key: "soc_set", domain: "number", lk: "bcSocMax", icon: "mdi:battery-high" },
+  { key: "discharging_cutoff_capacity", domain: "number", lk: "bcSocMin", icon: "mdi:battery-low" },
   { key: "min_soc", domain: "number", lk: "bcSocMin", icon: "mdi:battery-low" },
-  { key: "inverse_max_power", domain: "number", lk: "bcMaxDischarge", icon: "mdi:battery-arrow-down-outline" },
   { key: "force_mode", domain: "select", lk: "bcForceMode", icon: "mdi:gesture-tap-button" },
   { key: "set_charge_power", domain: "number", lk: "bcChargePower", icon: "mdi:battery-arrow-up-outline" },
   { key: "set_discharge_power", domain: "number", lk: "bcDischargePower", icon: "mdi:battery-arrow-down-outline" },
   { key: "max_charge_power", domain: "number", lk: "bcMaxCharge", icon: "mdi:battery-arrow-up-outline" },
+  // Max discharge: Marstek register + Zendure inverter-output cap share the label.
   { key: "max_discharge_power", domain: "number", lk: "bcMaxDischarge", icon: "mdi:battery-arrow-down-outline" },
+  { key: "inverse_max_power", domain: "number", lk: "bcMaxDischarge", icon: "mdi:battery-arrow-down-outline" },
   { key: "charge_to_soc", domain: "number", lk: "bcChargeToSoc", icon: "mdi:battery-sync-outline" },
   { key: "charge_hysteresis_percent", domain: "number", lk: "bcChargeHysteresis", icon: "mdi:battery-sync" },
   { key: "backup_function", domain: "switch", lk: "bcBackup", icon: "mdi:home-battery-outline" },
@@ -3052,8 +3054,7 @@ class MarstekVenusPanel extends HTMLElement {
     head.innerHTML =
       `<div class="bat-title"><span class="ic"><ha-icon icon="mdi:battery-high"></ha-icon></span>` +
       `<span class="bat-name"></span></div>` +
-      `<div class="bat-chips"><span class="chip bat-model" style="display:none"></span>` +
-      `<span class="chip bat-state">—</span></div>`;
+      `<div class="bat-chips"><span class="chip bat-state">—</span></div>`;
     card.appendChild(head);
 
     // ----- top: SOC ring + power readout -----
@@ -3152,7 +3153,6 @@ class MarstekVenusPanel extends HTMLElement {
     this._batCards[b.dev] = {
       card,
       name: head.querySelector(".bat-name"),
-      model: head.querySelector(".bat-model"),
       state: head.querySelector(".bat-state"),
       ringFg: ring.fg,
       ringCirc: ring.circ,
@@ -3198,16 +3198,6 @@ class MarstekVenusPanel extends HTMLElement {
 
   _patchBatteryCard(r, b) {
     r.name.textContent = b.name || this._t("battery");
-
-    // model chip (left of the state chip); hidden when the model is unknown
-    if (r.model) {
-      if (b.model) {
-        r.model.textContent = b.model;
-        r.model.style.display = "";
-      } else {
-        r.model.style.display = "none";
-      }
-    }
 
     // inverter-state chip (localized; tone by state)
     const inv = b.inverter;
@@ -3344,6 +3334,7 @@ class MarstekVenusPanel extends HTMLElement {
       if (val != null && val !== "")
         rows.push(`<div class="info-row"><span class="muted">${label}</span><span>${val}</span></div>`);
     };
+    addRow(this._t("infoModel"), b.model);
     addRow(this._t("infoSoftware"), b.info.sw);
     addRow("BMS", b.info.bms);
     addRow("VMS", b.info.vms);
@@ -3380,7 +3371,10 @@ class MarstekVenusPanel extends HTMLElement {
     const hass = this._hass;
     const avail = BAT_CONTROLS.filter((c) => {
       const id = b.entIds[c.key];
-      return id && hass.states[id];
+      const st = id && hass.states[id];
+      // Hide controls with no live value (e.g. stale registry entities left from
+      // re-adding a device under a different driver) — their slider is dead anyway.
+      return st && st.state !== "unavailable" && st.state !== "unknown";
     });
     const sig = avail.map((c) => c.key).join("|");
     if (sig !== r.ctlSig) {
@@ -4180,7 +4174,6 @@ class MarstekVenusPanel extends HTMLElement {
       .bat-name { font-family: var(--font-display); font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .bat-head .chip { flex-shrink: 0; }
       .bat-chips { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-      .bat-model { font-weight: 600; color: var(--ink-dim); }
       .bat-top { display: flex; align-items: center; gap: 18px; }
       .bat-ring { flex: 0 0 auto; }
       .bat-ring .ring-val { font-size: 30px; font-weight: 600; line-height: 1; }
