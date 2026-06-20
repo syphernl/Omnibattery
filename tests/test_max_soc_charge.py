@@ -25,7 +25,7 @@ from custom_components.marstek_venus_energy_manager.const import (
     NORMAL_BALANCE_CHARGE_POWER_W,
     NORMAL_BALANCE_RECAL_CUTOFF_CYCLES,
 )
-from custom_components.marstek_venus_energy_manager.max_soc_charge import (
+from custom_components.marstek_venus_energy_manager.control.max_soc_charge import (
     MaxSocChargeManager,
 )
 
