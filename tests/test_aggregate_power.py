@@ -1,9 +1,9 @@
-"""System charge/discharge power aggregation across mixed-brand coordinators.
+"""Aggregate power sensors across mixed-brand coordinators.
 
-Regression: Zendure coordinators only synthesise ``battery_power`` (+charge /
-−discharge); they never expose Marstek's ``ac_power`` register. The aggregate
-sensors summed ``ac_power`` only, so Zendure power was missing from System
-Charge Power / System Discharge Power.
+Covers System Charge/Discharge Power (Zendure coordinators only synthesise
+``battery_power`` (+charge / −discharge); Marstek exposes ``ac_power``) and
+System Battery Cell Power (signed, mirroring the dashboard formula
+``-ac_power - ac_offgrid_power + sum(MPPT)``).
 """
 from custom_components.marstek_venus_energy_manager.sensors.aggregate_sensors import (
     MarstekVenusAggregateSensor,
