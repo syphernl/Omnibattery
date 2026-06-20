@@ -4627,20 +4627,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Write initial configuration values to the battery: hardware SOC
                 # cut-offs (v2 only) + max charge/discharge power caps. The driver
                 # owns which registers exist for this version and the scaling.
-                max_charge_power = int(battery_config["max_charge_power"])
-                max_discharge_power = int(battery_config["max_discharge_power"])
+                #
+                # Registerless drivers (Zendure) are skipped: their SOC limits live
+                # in device flash and are written directly by the soc_set/min_soc
+                # number entities, which do NOT round-trip through battery_config.
+                # So battery_config still holds the config-flow defaults (max_soc=100,
+                # min_soc=12); re-asserting them here would clobber the user's
+                # device-set values on every restart and re-arm the full-charge
+                # taper/hysteresis machinery. The device is the source of truth and
+                # the coordinator syncs soc_set/min_soc back from the poll.
+                if coordinator.needs_software_manual_control:
+                    _LOGGER.info("Skipping initial SOC config write for %s (registerless driver; device flash holds the user values)",
+                               battery_config[CONF_NAME])
+                else:
+                    max_charge_power = int(battery_config["max_charge_power"])
+                    max_discharge_power = int(battery_config["max_discharge_power"])
 
-                _LOGGER.info("Writing initial configuration for %s (%s): max_soc=%d%%, min_soc=%d%%, max_charge=%dW, max_discharge=%dW",
-                           battery_config[CONF_NAME], coordinator.battery_version,
-                           battery_config["max_soc"], battery_config["min_soc"],
-                           max_charge_power, max_discharge_power)
+                    _LOGGER.info("Writing initial configuration for %s (%s): max_soc=%d%%, min_soc=%d%%, max_charge=%dW, max_discharge=%dW",
+                               battery_config[CONF_NAME], coordinator.battery_version,
+                               battery_config["max_soc"], battery_config["min_soc"],
+                               max_charge_power, max_discharge_power)
 
-                await coordinator.apply_config(
-                    max_soc_pct=battery_config["max_soc"],
-                    min_soc_pct=battery_config["min_soc"],
-                    max_charge_power_w=max_charge_power,
-                    max_discharge_power_w=max_discharge_power,
-                )
+                    await coordinator.apply_config(
+                        max_soc_pct=battery_config["max_soc"],
+                        min_soc_pct=battery_config["min_soc"],
+                        max_charge_power_w=max_charge_power,
+                        max_discharge_power_w=max_discharge_power,
+                    )
 
                 # Manually trigger first refresh and wait for it
                 await coordinator.async_request_refresh()
