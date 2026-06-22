@@ -442,7 +442,7 @@ const K = {
   sysCapacity: "system_total_energy",
   sysChargePower: "system_charge_power",
   sysDischargePower: "system_discharge_power",
-  sysBattCellPower: "system_battery_cell_power", // signed cell power (AC+MPPT); vA/vD only
+  sysBattCellPower: "system_battery_cell_power", // signed net battery power (+charge/-discharge); always present
 
   sysHomePower: "system_home_consumption", // derived instantaneous home consumption (W)
   sysDailyCharge: "system_daily_charging_energy",
@@ -1032,6 +1032,14 @@ class MarstekVenusPanel extends HTMLElement {
     const { byKey } = this._index();
     return (byKey.get(key) || [])[0] || null;
   }
+  /** Resolve the home consumption entity_id. Uses the panel config entity if it
+   *  still exists in hass.states (survives entity renames that happen after the
+   *  integration last loaded), otherwise falls back to the stable translation_key. */
+  _homeEntityId(hass) {
+    const cfgId = this._panelConfig.home_entity;
+    if (cfgId && hass && hass.states[cfgId]) return cfgId;
+    return this._sysEntityId(K.sysHomePower);
+  }
   _num(stateObj) {
     if (!stateObj) return null;
     const n = Number(stateObj.state);
@@ -1230,10 +1238,9 @@ class MarstekVenusPanel extends HTMLElement {
     const gridSign = this._panelConfig.grid_inverted ? -1 : 1;
     const grid = gridW != null ? (gridW * gridSign) / 1000 : null;
 
-    // home: explicit sensor, else derive  home = grid - battery + solar
-    const homeObj = this._panelConfig.home_entity
-      ? hass.states[this._panelConfig.home_entity]
-      : null;
+    // home: explicit sensor (resolved dynamically so entity renames are transparent),
+    // else derive  home = grid - battery + solar
+    const homeObj = hass.states[this._homeEntityId(hass)] || null;
     const homeW = this._watts(homeObj);
     let home;
     if (homeW != null) home = homeW / 1000;
@@ -1547,16 +1554,15 @@ class MarstekVenusPanel extends HTMLElement {
     };
     EDGES.forEach(node);
     // click a flow node -> more-info (history graph). Grid/Solar/Home map to the
-    // configured sensors. Battery: a single-battery system has a true net-power
-    // entity (ac_power); otherwise fall back to System Charge Power.
+    // configured sensors. Battery: use the signed system cell-power aggregate when
+    // available (shows total charge+discharge in one graph), else system charge power.
     const fcfg = this._panelConfig;
-    const acIds = (this._index().byKey.get(K.acPower)) || [];
-    const battEid = acIds.length === 1 ? acIds[0] : this._sysEntityId(K.sysChargePower);
+    const battEid = this._sysEntityId(K.sysBattCellPower) || this._sysEntityId(K.sysChargePower);
     this._linkMoreInfo(this._r.nGrid.node, fcfg.grid_entity);
     this._linkMoreInfo(this._r.nSolar.node, fcfg.solar_entity);
-    // home: configured sensor if any, else the backend-derived system sensor so
-    // clicking the node still opens a history graph.
-    this._linkMoreInfo(this._r.nHome.node, fcfg.home_entity || this._sysEntityId(K.sysHomePower));
+    // home: resolved dynamically (config entity_id if it exists, else translation_key)
+    // so clicks still work after an entity rename without an integration reload.
+    this._linkMoreInfo(this._r.nHome.node, this._homeEntityId(this._hass));
     this._linkMoreInfo(this._r.nBatt.node, battEid);
 
     // self-consumption chip, bottom-centre of the scene
@@ -2777,8 +2783,9 @@ class MarstekVenusPanel extends HTMLElement {
     const sysDis = (byKey.get(K.sysDischargePower) || [])[0];
     const acIds = byKey.get(K.acPower) || [];
     const ids = new Set();
+    const homeEid = this._homeEntityId(this._hass);
     if (cfg.solar_entity) ids.add(cfg.solar_entity);
-    if (cfg.home_entity) ids.add(cfg.home_entity);
+    if (homeEid) ids.add(homeEid);
     if (cfg.grid_entity) ids.add(cfg.grid_entity);
     // Query the system charge/discharge aggregates AND the per-battery AC power.
     // The system sensors are preferred, but they can be `unavailable` (e.g. a
@@ -2805,7 +2812,7 @@ class MarstekVenusPanel extends HTMLElement {
     }
     if (!res) return;
     const solar = cfg.solar_entity ? this._sampleToGrid(res, cfg.solar_entity, grid) : null;
-    const home = cfg.home_entity ? this._sampleToGrid(res, cfg.home_entity, grid) : null;
+    const home = homeEid ? this._sampleToGrid(res, homeEid, grid) : null;
     let gridS = cfg.grid_entity ? this._sampleToGrid(res, cfg.grid_entity, grid) : null;
     // Match the integration's +import / -export convention for an inverted meter.
     if (gridS && cfg.grid_inverted) gridS = gridS.map((v) => (v == null ? v : -v));

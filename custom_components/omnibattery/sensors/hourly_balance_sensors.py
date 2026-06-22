@@ -10,7 +10,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..const import DOMAIN, CONF_ENABLE_HOURLY_BALANCE
-from ..infra.entity_naming import english_entity_id
+from ..infra.entity_naming import system_entity_id
 from ..tracking.hourly_balance import HourlyBalanceManager
 
 
@@ -52,14 +52,14 @@ class NetBalanceSensor(SensorEntity):
     def __init__(self, entry: ConfigEntry, mgr: HourlyBalanceManager) -> None:
         self._entry = entry
         self._mgr = mgr
-        self._attr_unique_id = f"{entry.entry_id}_balance_neto"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "net_balance")
+        self._attr_unique_id = f"marstek_venus_system_balance_neto"
+        self.entity_id = system_entity_id("sensor", "net_balance")
 
     @property
     def device_info(self) -> dict:
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

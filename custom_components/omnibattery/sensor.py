@@ -16,7 +16,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .infra.entity_naming import english_entity_id
+from .infra.entity_naming import english_entity_id, system_entity_id
 from .const import (
     DOMAIN,
     EFFICIENCY_SENSOR_DEFINITIONS,
@@ -219,11 +219,11 @@ async def async_setup_entry(
     # the external sensor, so gate on has_mppt_pv to avoid redundant noise.
     if controller and has_mppt_pv:
         entities.append(SystemSolarPowerSensor(controller))
-    # Signed system cell power (AC + MPPT), the value the SOC card's Charge/Discharge
-    # blocks display. Added only for DC-coupled PV systems (vA/vD) so those blocks can
-    # link to a matching sensor instead of the AC-only system_charge_power (#347).
-    if has_mppt_pv:
-        entities.append(MarstekVenusAggregateSensor(coordinators, SYSTEM_BATTERY_CELL_POWER_DEFINITION, entry, hass))
+    # Signed system battery power (+charge / -discharge). Always present so the
+    # flow-diagram battery node and SOC card blocks can link to a single signed
+    # aggregate instead of the unsigned system_charge_power. MPPT is included when
+    # available; non-MPPT systems fall back to battery_power per coordinator.
+    entities.append(MarstekVenusAggregateSensor(coordinators, SYSTEM_BATTERY_CELL_POWER_DEFINITION, entry, hass))
     # The daily home total is derived from the (always-present) net grid meter:
     # grid + battery AC + solar, matching the power-flow Home Consumption sensor.
     if controller and getattr(controller, "consumption_sensor", None):
@@ -343,8 +343,8 @@ class DischargeWindowSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "discharge_window"
-        self._attr_unique_id = f"{entry.entry_id}_discharge_window"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "discharge_window")
+        self._attr_unique_id = f"marstek_venus_system_discharge_window"
+        self.entity_id = system_entity_id("sensor", "discharge_window")
         self._attr_icon = "mdi:clock-check-outline"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -435,7 +435,7 @@ class DischargeWindowSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -455,8 +455,8 @@ class ActiveBatteriesSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "active_batteries"
-        self._attr_unique_id = f"{entry.entry_id}_active_batteries"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "active_batteries")
+        self._attr_unique_id = f"marstek_venus_system_active_batteries"
+        self.entity_id = system_entity_id("sensor", "active_batteries")
         self._attr_icon = "mdi:battery-sync"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -507,7 +507,7 @@ class ActiveBatteriesSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -524,8 +524,8 @@ class WeeklyFullChargeSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "weekly_full_charge"
-        self._attr_unique_id = f"{entry.entry_id}_weekly_full_charge_status"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "weekly_full_charge_status")
+        self._attr_unique_id = f"marstek_venus_system_weekly_full_charge_status"
+        self.entity_id = system_entity_id("sensor", "weekly_full_charge_status")
         self._attr_icon = "mdi:battery-clock"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -561,7 +561,7 @@ class WeeklyFullChargeSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -581,8 +581,8 @@ class ChargeDelaySensor(RestoreEntity, SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "charge_delay_status"
-        self._attr_unique_id = f"{entry.entry_id}_charge_delay_status"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "charge_delay_status")
+        self._attr_unique_id = f"marstek_venus_system_charge_delay_status"
+        self.entity_id = system_entity_id("sensor", "charge_delay_status")
         self._attr_icon = "mdi:clock-alert-outline"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -664,7 +664,7 @@ class ChargeDelaySensor(RestoreEntity, SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -684,8 +684,8 @@ class ConfigurationSummarySensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "configuration_summary"
-        self._attr_unique_id = f"{entry.entry_id}_configuration_summary"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "configuration_summary")
+        self._attr_unique_id = f"marstek_venus_system_configuration_summary"
+        self.entity_id = system_entity_id("sensor", "configuration_summary")
         self._attr_icon = "mdi:cog-outline"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_entity_registry_enabled_default = False
@@ -938,7 +938,7 @@ class ConfigurationSummarySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -959,8 +959,8 @@ class IntegrationStatusSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "integration_status"
-        self._attr_unique_id = f"{entry.entry_id}_integration_status"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "integration_status")
+        self._attr_unique_id = f"marstek_venus_system_integration_status"
+        self.entity_id = system_entity_id("sensor", "integration_status")
         self._attr_icon = "mdi:home-battery"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -1216,7 +1216,7 @@ class IntegrationStatusSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1236,8 +1236,8 @@ class NonResponsiveBatteriesSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "non_responsive_batteries"
-        self._attr_unique_id = f"{entry.entry_id}_non_responsive_batteries"
-        self.entity_id = english_entity_id("sensor", "Marstek Venus System", "non_responsive_batteries")
+        self._attr_unique_id = f"marstek_venus_system_non_responsive_batteries"
+        self.entity_id = system_entity_id("sensor", "non_responsive_batteries")
         self._attr_icon = "mdi:battery-alert"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_should_poll = True
@@ -1291,7 +1291,7 @@ class NonResponsiveBatteriesSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1319,7 +1319,7 @@ class DailySolarEnergySensor(SensorEntity):
     def __init__(self, controller) -> None:
         """Initialize the daily solar energy sensor."""
         self._controller = controller
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "daily_solar_energy")
 
     @property
     def native_value(self) -> float:
@@ -1331,7 +1331,7 @@ class DailySolarEnergySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1361,7 +1361,7 @@ class SystemSolarPowerSensor(SensorEntity):
     def __init__(self, controller) -> None:
         """Initialize the system solar power sensor."""
         self._controller = controller
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "solar_power")
 
     @property
     def native_value(self) -> float | None:
@@ -1379,7 +1379,7 @@ class SystemSolarPowerSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1406,7 +1406,7 @@ class DailyHomeEnergySensor(SensorEntity):
     def __init__(self, controller) -> None:
         """Initialize the daily home energy sensor."""
         self._controller = controller
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "daily_home_energy")
 
     @property
     def native_value(self) -> float:
@@ -1418,7 +1418,7 @@ class DailyHomeEnergySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1445,7 +1445,7 @@ class DailyGridImportEnergySensor(SensorEntity):
     def __init__(self, controller) -> None:
         """Initialize the daily grid import energy sensor."""
         self._controller = controller
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "daily_grid_import_energy")
 
     @property
     def native_value(self) -> float:
@@ -1457,7 +1457,7 @@ class DailyGridImportEnergySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -1483,7 +1483,7 @@ class DailyGridExportEnergySensor(SensorEntity):
     def __init__(self, controller) -> None:
         """Initialize the daily grid export energy sensor."""
         self._controller = controller
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "daily_grid_export_energy")
 
     @property
     def native_value(self) -> float:
@@ -1495,7 +1495,7 @@ class DailyGridExportEnergySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

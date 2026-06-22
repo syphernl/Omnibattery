@@ -20,7 +20,7 @@ from .const import (
     DOMAIN,
 )
 from .infra.coordinator import MarstekVenusDataUpdateCoordinator
-from .infra.entity_naming import english_entity_id
+from .infra.entity_naming import english_entity_id, system_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -197,8 +197,8 @@ class MarstekConfigNumberEntity(NumberEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = definition["key"]
-        self._attr_unique_id = f"{entry.entry_id}_{definition['key']}"
-        self.entity_id = english_entity_id("number", "Marstek Venus System", definition["key"])
+        self._attr_unique_id = f"marstek_venus_system_{definition['key']}"
+        self.entity_id = system_entity_id("number", definition["key"])
         self._attr_icon = definition.get("icon")
         self._attr_native_unit_of_measurement = definition.get("unit")
         self._attr_native_min_value = definition["min"]
@@ -247,7 +247,7 @@ class MarstekConfigNumberEntity(NumberEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

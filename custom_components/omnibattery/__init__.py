@@ -218,7 +218,17 @@ async def _async_register_frontend_panel(hass: HomeAssistant, entry: ConfigEntry
             # Home node = the integration's derived Home Consumption aggregate sensor
             # (grid + battery AC + solar). The dedicated household sensor was removed
             # from the config flow, so the derived sensor is the single home source.
-            panel_config["home_entity"] = "sensor.marstek_venus_system_home_consumption"
+            # Resolve by the stable unique_id (never changes) instead of a literal
+            # entity_id, so the link survives a user "Recreate entity IDs" rename to
+            # sensor.omnibattery_home_consumption.
+            from homeassistant.helpers import entity_registry as er
+
+            ent_reg = er.async_get(hass)
+            home_eid = ent_reg.async_get_entity_id(
+                "sensor", DOMAIN, "marstek_venus_system_home_consumption"
+            )
+            if home_eid:
+                panel_config["home_entity"] = home_eid
             if data.get(CONF_SOLAR_FORECAST_SENSOR):
                 panel_config["solar_forecast_entity"] = data[CONF_SOLAR_FORECAST_SENSOR]
             # Solar node click target. When any battery has DC-coupled PV (vA/vD)
@@ -229,7 +239,11 @@ async def _async_register_frontend_panel(hass: HomeAssistant, entry: ConfigEntry
             # never get that sensor, so they keep the external-only link (or none).
             versions = {b.get(CONF_BATTERY_VERSION) for b in data.get("batteries", [])}
             if versions & {"vA", "vD"}:
-                panel_config["solar_entity"] = "sensor.marstek_venus_system_solar_power"
+                solar_eid = ent_reg.async_get_entity_id(
+                    "sensor", DOMAIN, "marstek_venus_system_solar_power"
+                )
+                if solar_eid:
+                    panel_config["solar_entity"] = solar_eid
             elif data.get(CONF_SOLAR_PRODUCTION_SENSOR):
                 panel_config["solar_entity"] = data[CONF_SOLAR_PRODUCTION_SENSOR]
 
@@ -4430,8 +4444,11 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
               keep their configured percent; batteries that had it off (or unset)
               get the MIN_CHARGE_HYSTERESIS_PERCENT floor. Any value is clamped up
               to the floor so SOC drift can't shrink the deadband into chatter.
+    v8 -> v9: re-key system-level entity unique_ids off the config entry_id and
+              onto a stable "marstek_venus_system_" prefix, and heal the duplicate
+              entities the Omnibattery domain migration created (orphan + `_2`).
     """
-    if entry.version >= 8:
+    if entry.version >= 9:
         return True
 
     new_data = dict(entry.data)
@@ -4579,7 +4596,80 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             MIN_CHARGE_HYSTERESIS_PERCENT,
         )
 
-    hass.config_entries.async_update_entry(entry, data=new_data, version=8)
+    if entry.version < 9:
+        # System-level entities used to key their unique_id on the config
+        # entry_id (`f"{entry.entry_id}_{key}"`). The Omnibattery domain
+        # migration creates a NEW config entry (new entry_id), so those
+        # unique_ids changed and HA registered duplicates: the old entities
+        # became orphans (device_id None, stale entry_id prefix) while the new
+        # ones got bumped to `_2` entity_ids. The dashboard (which matches by
+        # translation_key) then grabbed the dead orphan and rendered blanks.
+        #
+        # Fix: re-key these unique_ids to a STABLE prefix ("marstek_venus_system_",
+        # matching the aggregate sensors so future entry recreation can't churn
+        # them) and heal any duplicates. The entry_id is either a 26-char ULID
+        # (current HA) or a 32-char lowercase hex (`uuid4().hex`, older installs
+        # that migrate 2.0.x -> 3.0.0), so the logical key is everything after the
+        # first `<entry_id>_`. Per-battery entities key on device_key (host_port)
+        # and aggregates already use the stable prefix, so neither matches the
+        # entry_id pattern and both are left untouched.
+        import re as _re
+        from homeassistant.helpers import entity_registry as er
+
+        STABLE = "marstek_venus_system_"
+        _entry_key = _re.compile(r"^(?:[0-9A-Z]{26}|[0-9a-f]{32})_(.+)$")
+
+        ent_reg = er.async_get(hass)
+        by_key: dict[str, list] = {}
+        for ent in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+            m = _entry_key.match(ent.unique_id)
+            if m:
+                by_key.setdefault(m.group(1), []).append(ent)
+
+        healed = 0
+        for key, cands in by_key.items():
+            new_uid = f"{STABLE}{key}"
+
+            # Keeper = the entity to preserve: prefer one bound to the device
+            # AND on the current entry_id (the live `_2` in the already-migrated
+            # case), then any device-bound one (fresh-migrant moved entity),
+            # else current-entry, else first.
+            keeper = next(
+                (c for c in cands
+                 if c.device_id and c.unique_id.startswith(entry.entry_id + "_")),
+                None,
+            ) or next((c for c in cands if c.device_id), None) \
+              or next((c for c in cands if c.unique_id.startswith(entry.entry_id + "_")), None) \
+              or cands[0]
+
+            # Delete the duplicate orphan(s); the first one holds the clean
+            # (non-suffixed) entity_id the keeper should reclaim.
+            clean_eid = None
+            for o in cands:
+                if o is keeper:
+                    continue
+                if clean_eid is None:
+                    clean_eid = o.entity_id
+                ent_reg.async_remove(o.entity_id)
+
+            update: dict = {}
+            if not ent_reg.async_get_entity_id(keeper.domain, DOMAIN, new_uid):
+                update["new_unique_id"] = new_uid
+            if (clean_eid and clean_eid != keeper.entity_id
+                    and ent_reg.async_get(clean_eid) is None):
+                update["new_entity_id"] = clean_eid
+            if update:
+                ent_reg.async_update_entity(keeper.entity_id, **update)
+                healed += 1
+
+        _LOGGER.info(
+            "Omnibattery: migrated config entry to version 9 "
+            "(re-keyed %d system entity unique_id(s) to stable prefix; "
+            "removed post-rebrand duplicates)",
+            healed,
+        )
+
+    hass.config_entries.async_update_entry(entry, data=new_data, version=9)
     return True
 
 

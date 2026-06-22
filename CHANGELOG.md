@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- **Opt-in rename of system entities to `omnibattery_*`**: system entities now *suggest* an `omnibattery_*` entity ID while keeping their legacy `unique_id` (so recorder history and statistics stay linked). Existing installs are untouched until you trigger HA's built-in **Settings → Devices & Services → Omnibattery → ⋯ → Recreate entity IDs**, which renames `sensor.marstek_venus_system_*` → `sensor.omnibattery_*` in place (history preserved); new installs get the Omnibattery IDs from the start. The dashboard matches by translation_key, so it keeps working through the rename. ⚠️ Your own automations/templates/Energy-dashboard config that reference the old IDs must be repointed manually. [`infra/entity_naming.py`](custom_components/omnibattery/infra/entity_naming.py).
+
+### Fixed
+- **Duplicate system entities + blank dashboard cards after the Omnibattery rebrand**: system-level entities keyed their `unique_id` on the config entry_id, so the domain migration's new entry recreated them as duplicates (orphaned originals + `_2` ids), and the dashboard — matching by translation_key — rendered the dead orphans as blanks. unique_ids are now keyed on the stable `marstek_venus_system_` prefix; config entry v8 → v9 re-keys existing system entities and removes the orphans. [`__init__.py`](custom_components/omnibattery/__init__.py).
+
 ## [3.0.0] - 2026-06-21
 
 > ⚠️ **The integration is now “Omnibattery”** (renamed from Marstek Venus Energy Manager — it is multi-brand now). After updating via HACS the old integration disappears: go to **Settings → Devices & Services → Add Integration → Omnibattery** and confirm the migration when prompted. Everything is preserved — config, entity IDs, history, settings. Hard-refresh the browser (**Ctrl+F5**) so the renamed sidebar panel loads.

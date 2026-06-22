@@ -20,7 +20,7 @@ from .const import (
     pd_profile_from_params,
 )
 from .infra.coordinator import MarstekVenusDataUpdateCoordinator
-from .infra.entity_naming import english_entity_id
+from .infra.entity_naming import english_entity_id, system_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,8 +126,8 @@ class WeeklyFullChargeDaySelect(SelectEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "weekly_full_charge_day"
-        self._attr_unique_id = f"{entry.entry_id}_weekly_full_charge_day"
-        self.entity_id = english_entity_id("select", "Marstek Venus System", "weekly_full_charge_day")
+        self._attr_unique_id = f"marstek_venus_system_weekly_full_charge_day"
+        self.entity_id = system_entity_id("select", "weekly_full_charge_day")
         self._attr_icon = "mdi:calendar-week"
         self._attr_options = WEEKDAY_OPTIONS
         self._attr_should_poll = False
@@ -152,7 +152,7 @@ class WeeklyFullChargeDaySelect(SelectEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -176,8 +176,8 @@ class PdTuningProfileSelect(SelectEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "pd_tuning_profile"
-        self._attr_unique_id = f"{entry.entry_id}_pd_tuning_profile"
-        self.entity_id = english_entity_id("select", "Marstek Venus System", "pd_tuning_profile")
+        self._attr_unique_id = f"marstek_venus_system_pd_tuning_profile"
+        self.entity_id = system_entity_id("select", "pd_tuning_profile")
         self._attr_icon = "mdi:tune-variant"
         self._attr_options = list(PD_TUNING_PROFILE_OPTIONS)
         self._attr_should_poll = False
@@ -221,7 +221,7 @@ class PdTuningProfileSelect(SelectEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

@@ -13,7 +13,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, CONF_CAPACITY_PROTECTION_ENABLED
 from .infra.coordinator import MarstekVenusDataUpdateCoordinator
-from .infra.entity_naming import english_entity_id
+from .infra.entity_naming import english_entity_id, system_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -183,8 +183,8 @@ class CapacityProtectionStatusSensor(BinarySensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "capacity_protection_active"
-        self._attr_unique_id = f"{entry.entry_id}_capacity_protection_active"
-        self.entity_id = english_entity_id("binary_sensor", "Marstek Venus System", "capacity_protection_active")
+        self._attr_unique_id = f"marstek_venus_system_capacity_protection_active"
+        self.entity_id = system_entity_id("binary_sensor", "capacity_protection_active")
         self._attr_device_class = "running"
         self._attr_icon = "mdi:shield-alert"
         self._attr_should_poll = True
@@ -215,7 +215,7 @@ class CapacityProtectionStatusSensor(BinarySensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -232,8 +232,8 @@ class PredictiveChargingStatusSensor(BinarySensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_translation_key = "predictive_charging_active"
-        self._attr_unique_id = f"{entry.entry_id}_predictive_charging_active"
-        self.entity_id = english_entity_id("binary_sensor", "Marstek Venus System", "predictive_charging_active")
+        self._attr_unique_id = f"marstek_venus_system_predictive_charging_active"
+        self.entity_id = system_entity_id("binary_sensor", "predictive_charging_active")
         self._attr_device_class = "running"
         self._attr_icon = "mdi:battery-charging-wireless"
         self._attr_should_poll = True  # Poll to update state
@@ -388,7 +388,7 @@ class PredictiveChargingStatusSensor(BinarySensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

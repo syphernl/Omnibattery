@@ -13,6 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 
 from ..const import DOMAIN, ALARM_BIT_DESCRIPTIONS, FAULT_BIT_DESCRIPTIONS, DEBUG_POLL_SENSOR_VALUES, CONF_SOLAR_PRODUCTION_SENSOR, CONF_METER_INVERTED, pd_profile_from_params
 from ..infra.coordinator import MarstekVenusDataUpdateCoordinator
+from ..infra.entity_naming import system_entity_id
 
 
 # Define aggregate sensor definitions
@@ -120,7 +121,7 @@ class DailyGridAtMinSocSensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_unique_id = "marstek_venus_system_daily_grid_at_min_soc_energy"
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "daily_grid_at_min_soc_energy")
         self._attr_translation_key = "system_daily_grid_at_min_soc_energy"
         self._attr_native_unit_of_measurement = "kWh"
         self._attr_device_class = SensorDeviceClass.ENERGY
@@ -143,7 +144,7 @@ class DailyGridAtMinSocSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -174,7 +175,7 @@ class PdControlQualitySensor(SensorEntity):
 
         self._attr_has_entity_name = True
         self._attr_unique_id = "marstek_venus_system_pd_control_quality"
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "pd_control_quality")
         self._attr_translation_key = "system_pd_control_quality"
         self._attr_device_class = SensorDeviceClass.ENUM
         self._attr_options = list(self._STATES)
@@ -222,7 +223,7 @@ class PdControlQualitySensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -244,7 +245,7 @@ class MarstekVenusAggregateSensor(SensorEntity):
         self._attr_has_entity_name = True
         self._attr_translation_key = definition["key"]
         self._attr_unique_id = f"marstek_venus_system_{definition['key']}"
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", definition["key"])
         self._attr_device_class = definition.get("device_class")
         self._attr_state_class = definition.get("state_class")
         self._attr_native_unit_of_measurement = definition.get("unit")
@@ -549,7 +550,7 @@ class MarstekVenusAggregateSensor(SensorEntity):
         """Return device information for the system."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }
@@ -582,7 +583,7 @@ class SystemAlarmSensor(SensorEntity):
     def __init__(self, coordinators: list[MarstekVenusDataUpdateCoordinator]) -> None:
         """Initialize the system alarm sensor."""
         self.coordinators = coordinators
-        self.entity_id = f"sensor.{self._attr_unique_id}"
+        self.entity_id = system_entity_id("sensor", "alarm_status")
 
         for coordinator in coordinators:
             coordinator.async_add_listener(self._handle_coordinator_update)
@@ -639,7 +640,7 @@ class SystemAlarmSensor(SensorEntity):
         """Attach to the system device."""
         return {
             "identifiers": {(DOMAIN, "marstek_venus_system")},
-            "name": "Marstek Venus System",
+            "name": "Omnibattery System",
             "manufacturer": "Marstek",
             "model": "Venus Multi-Battery System",
         }

@@ -24,3 +24,31 @@ def english_entity_id(domain: str, device_name: str, key: str) -> str:
     translation key.
     """
     return f"{domain}.{slugify(f'{device_name} {key}')}"
+
+
+# System (aggregate) entities keep a stable, brand-legacy ``unique_id`` prefix so
+# the registry identity — and the long-term statistics/history tied to it —
+# survive the Omnibattery rebrand untouched. Never change this; the v9 heal
+# migration and existing installs depend on it.
+SYSTEM_UNIQUE_ID_PREFIX = "marstek_venus_system_"
+
+# The *suggested* object id, however, uses the Omnibattery prefix. Existing
+# installs keep their stored ``sensor.marstek_venus_system_*`` id until the user
+# opts in via HA's built-in "Recreate entity IDs" (which regenerates from the
+# suggested object id); fresh installs are born ``omnibattery_*``.
+#
+# The prefix is just ``omnibattery_`` (not ``omnibattery_system_``): several keys
+# already start with ``system_`` (e.g. ``system_soc``), so an ``..._system_``
+# prefix would double it into ``omnibattery_system_system_soc``. Keys carry their
+# own grouping; this yields ``omnibattery_system_soc`` and ``omnibattery_home_consumption``.
+SYSTEM_OBJECT_ID_PREFIX = "omnibattery_"
+
+
+def system_entity_id(domain: str, key: str) -> str:
+    """Return the suggested ``entity_id`` for a system-level entity.
+
+    ``key`` is the English object-id suffix (which may differ from the unique_id
+    suffix, e.g. ``net_balance`` vs. unique ``balance_neto``). The unique_id keeps
+    :data:`SYSTEM_UNIQUE_ID_PREFIX`; only the suggested entity_id is rebranded.
+    """
+    return f"{domain}.{SYSTEM_OBJECT_ID_PREFIX}{key}"
