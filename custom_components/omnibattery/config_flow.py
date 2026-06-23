@@ -1495,6 +1495,7 @@ class MarstekVenusConfigFlow(LegacyDomainMigrationMixin, ConfigFlow, domain=DOMA
                     vol.Required("configure_hourly_balance", default=False): bool,
                 }
             ),
+            description_placeholders={"country": self.hass.config.country or "—"},
         )
 
     async def async_step_hourly_balance_config(
@@ -3239,6 +3240,7 @@ class OptionsFlowHandler(OptionsFlow):
                     vol.Required("configure_hourly_balance", default=is_enabled): bool,
                 }
             ),
+            description_placeholders={"country": self.hass.config.country or "—"},
         )
 
     async def async_step_hourly_balance_config(

@@ -381,7 +381,7 @@
       },
       "hourly_balance": {
         "title": "Uurlijks Netsaldo",
-        "description": "Uurlijkse netsaldo-regeling inschakelen? Deze functie registreert netimport/-export per uur en past het batterij-instelpunt automatisch aan om een doel-energiebalans te bereiken.\n\n⚠️ **Belangrijk**: Deze functie heeft alleen zin als uw elektriciteitscontract een **slimme meter (smart meter)** met **uurlijkse netsaldo-berekening** bevat. Als uw meter geen uurlijkse netsaldo berekent, zullen de aanpassingen van het batterij-instelpunt niet leiden tot kostenbesparingen en biedt de functie geen voordeel.",
+        "description": "Uurlijkse netsaldo-regeling inschakelen? Deze functie registreert netimport/-export per uur en past het batterij-instelpunt automatisch aan om een doel-energiebalans te bereiken.\n\n⚠️ **Deze functie is alleen nuttig in Spanje**, onder de regeling voor uurlijkse compensatie van overschotten (Koninklijk Besluit 244/2019), waarbij netoverschot per uur wordt verrekend. In markten met terugleververgoeding (feed-in) of jaarlijkse saldering biedt het geen voordeel en kan het leiden tot gemiste teruglever-inkomsten en onnodige batterijcycli.\n\nGedetecteerd Home Assistant-land: **{country}**.",
         "data": {
           "configure_hourly_balance": "Uurlijks nettosaldo configureren"
         }
@@ -847,7 +847,7 @@
       },
       "hourly_balance": {
         "title": "Uurlijks Netsaldo",
-        "description": "Uurlijkse netsaldo-regeling inschakelen? Deze functie registreert netimport/-export per uur en past het batterij-instelpunt automatisch aan om een doel-energiebalans te bereiken.\n\n⚠️ **Belangrijk**: Deze functie heeft alleen zin als uw elektriciteitscontract een **slimme meter (smart meter)** met **uurlijkse netsaldo-berekening** bevat. Als uw meter geen uurlijkse netsaldo berekent, zullen de aanpassingen van het batterij-instelpunt niet leiden tot kostenbesparingen en biedt de functie geen voordeel.",
+        "description": "Uurlijkse netsaldo-regeling inschakelen? Deze functie registreert netimport/-export per uur en past het batterij-instelpunt automatisch aan om een doel-energiebalans te bereiken.\n\n⚠️ **Deze functie is alleen nuttig in Spanje**, onder de regeling voor uurlijkse compensatie van overschotten (Koninklijk Besluit 244/2019), waarbij netoverschot per uur wordt verrekend. In markten met terugleververgoeding (feed-in) of jaarlijkse saldering biedt het geen voordeel en kan het leiden tot gemiste teruglever-inkomsten en onnodige batterijcycli.\n\nGedetecteerd Home Assistant-land: **{country}**.",
         "data": {
           "configure_hourly_balance": "Uurlijks nettosaldo configureren"
         }

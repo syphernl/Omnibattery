@@ -344,7 +344,7 @@
       },
       "hourly_balance": {
         "title": "Balance Neto Horario",
-        "description": "¿Activar el control de balance neto horario? Esta función registra la importación/exportación de red por hora y ajusta automáticamente el setpoint de la batería para alcanzar un balance de energía objetivo.\n\n⚠️ **Importante**: Esta función solo tiene sentido si tu contrato eléctrico incluye un **contador inteligente (smart meter)** que realice **cálculo del balance neto horario**. Si tu contador no calcula el balance neto por hora, los ajustes al setpoint de la batería no se traducirán en ahorro de costes y la función no proporciona beneficio.",
+        "description": "¿Activar el control de balance neto horario? Esta función registra la importación/exportación de red por hora y ajusta automáticamente el setpoint de la batería para alcanzar un balance de energía objetivo.\n\n⚠️ **Esta función solo tiene utilidad en España**, bajo el esquema de compensación de excedentes horaria (Real Decreto 244/2019), donde el excedente vertido a la red se liquida hora a hora. En mercados con tarifa de inyección (feed-in) o balance neto anual no aporta ningún beneficio y puede causar pérdida de ingresos por exportación y ciclado innecesario de la batería.\n\nPaís detectado en Home Assistant: **{country}**.",
         "data": {
           "configure_hourly_balance": "Configurar balance neto horario"
         }
@@ -847,7 +847,7 @@
       },
       "hourly_balance": {
         "title": "Balance Neto Horario",
-        "description": "¿Activar el control de balance neto horario? Esta función registra la importación/exportación de red por hora y ajusta automáticamente el setpoint de la batería para alcanzar un balance de energía objetivo.\n\n⚠️ **Importante**: Esta función solo tiene sentido si tu contrato eléctrico incluye un **contador inteligente (smart meter)** que realice **cálculo del balance neto horario**. Si tu contador no calcula el balance neto por hora, los ajustes al setpoint de la batería no se traducirán en ahorro de costes y la función no proporciona beneficio.",
+        "description": "¿Activar el control de balance neto horario? Esta función registra la importación/exportación de red por hora y ajusta automáticamente el setpoint de la batería para alcanzar un balance de energía objetivo.\n\n⚠️ **Esta función solo tiene utilidad en España**, bajo el esquema de compensación de excedentes horaria (Real Decreto 244/2019), donde el excedente vertido a la red se liquida hora a hora. En mercados con tarifa de inyección (feed-in) o balance neto anual no aporta ningún beneficio y puede causar pérdida de ingresos por exportación y ciclado innecesario de la batería.\n\nPaís detectado en Home Assistant: **{country}**.",
         "data": {
           "configure_hourly_balance": "Configurar balance neto horario"
         }

@@ -344,7 +344,7 @@
       },
       "hourly_balance": {
         "title": "Balanç Net Horari",
-        "description": "Activar el control de balanç net horari? Aquesta funció registra la importació/exportació de xarxa per hora i ajusta automàticament el setpoint de la bateria per assolir un balanç d'energia objectiu.\n\n⚠️ **Important**: Aquesta funció només té sentit si el teu contracte elèctric inclou un **comptador intel·ligent (smart meter)** que realitzi **càlcul del balanç net horari**. Si el teu comptador no calcula el balanç net per hora, els ajustos al setpoint de la bateria no es traduiran en estalvi de costos i la funció no proporciona cap benefici.",
+        "description": "Activar el control de balanç net horari? Aquesta funció registra la importació/exportació de xarxa per hora i ajusta automàticament el setpoint de la bateria per assolir un balanç d'energia objectiu.\n\n⚠️ **Aquesta funció només té utilitat a Espanya**, sota l'esquema de compensació d'excedents horària (Reial Decret 244/2019), on l'excedent abocat a la xarxa es liquida hora a hora. En mercats amb tarifa d'injecció (feed-in) o balanç net anual no aporta cap benefici i pot causar pèrdua d'ingressos per exportació i cicles innecessaris de la bateria.\n\nPaís detectat a Home Assistant: **{country}**.",
         "data": {
           "configure_hourly_balance": "Configurar balanç net horari"
         }
@@ -847,7 +847,7 @@
       },
       "hourly_balance": {
         "title": "Balanç Net Horari",
-        "description": "Activar el control de balanç net horari? Aquesta funció registra la importació/exportació de xarxa per hora i ajusta automàticament el setpoint de la bateria per assolir un balanç d'energia objectiu.\n\n⚠️ **Important**: Aquesta funció només té sentit si el teu contracte elèctric inclou un **comptador intel·ligent (smart meter)** que realitzi **càlcul del balanç net horari**. Si el teu comptador no calcula el balanç net per hora, els ajustos al setpoint de la bateria no es traduiran en estalvi de costos i la funció no proporciona cap benefici.",
+        "description": "Activar el control de balanç net horari? Aquesta funció registra la importació/exportació de xarxa per hora i ajusta automàticament el setpoint de la bateria per assolir un balanç d'energia objectiu.\n\n⚠️ **Aquesta funció només té utilitat a Espanya**, sota l'esquema de compensació d'excedents horària (Reial Decret 244/2019), on l'excedent abocat a la xarxa es liquida hora a hora. En mercats amb tarifa d'injecció (feed-in) o balanç net anual no aporta cap benefici i pot causar pèrdua d'ingressos per exportació i cicles innecessaris de la bateria.\n\nPaís detectat a Home Assistant: **{country}**.",
         "data": {
           "configure_hourly_balance": "Configurar balanç net horari"
         }
