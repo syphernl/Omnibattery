@@ -165,4 +165,5 @@ class FakeCoordinator:
             has_mppt_pv=has_pv,
             has_alarm_registers=self.battery_version == "v2",
             has_rs485_control=True,
+            actuator_latency_s=0.8 if v3_family else 0.3,
         )

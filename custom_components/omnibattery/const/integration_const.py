@@ -202,6 +202,13 @@ BMS_DISCHARGE_CUTOFF_SOC = 20                  # %: below this, refused discharg
 # delivering are caught up to N writes later instead of immediately.
 PD_READBACK_EVERY_N_WRITES = 5
 
+# An actuator at or below this latency (seconds, DriverCapabilities.actuator_latency_s)
+# reaches its setpoint and reflects it in telemetry within one poll. Such drivers do
+# the hot-path readback and use the measured-power feedforward; slower ones (Zendure
+# HTTP, ~2.5 s settle) skip both so their multi-second latency can't block or destabilise
+# the shared control loop. Set to the coordinator poll interval.
+FAST_ACTUATOR_MAX_LATENCY_S = 1.5
+
 # Discharge engage grace: a slow inverter (e.g. Zendure HTTP) takes seconds to
 # reverse from charge/idle into discharge — measured up to ~20-30 s on a cold
 # charge→discharge transition. During that window an ACK'd command legitimately

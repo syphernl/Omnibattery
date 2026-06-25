@@ -117,6 +117,7 @@ from .const import (
     NORMAL_BALANCE_RECAL_INVERTER_STANDBY,
     BMS_DISCHARGE_CUTOFF_SOC,
     PD_READBACK_EVERY_N_WRITES,
+    FAST_ACTUATOR_MAX_LATENCY_S,
     DISCHARGE_ENGAGE_GRACE_S,
     CONF_ACTIVE_BALANCE_MODE_ENABLED,
     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
@@ -305,7 +306,18 @@ class ChargeDischargeController:
         self.coordinators = coordinators
         self.consumption_sensor = consumption_sensor
         self.config_entry = config_entry
-        
+
+        # Slowest actuator in the fleet sets the loop pace: the shared control loop
+        # cannot correct faster than the slowest battery can absorb a setpoint without
+        # the dead-time oscillation of firing several corrections before the first
+        # lands. Drives the grid-filter time constant (_apply_no_pd_overrides), the
+        # effective min cycle interval below, the hot-path readback gate and the
+        # measured-power feedforward gate (_feedforward_base).
+        self._actuator_latency_s = max(
+            (c.capabilities.actuator_latency_s for c in coordinators),
+            default=0.5,
+        )
+
         # State tracking
         self.previous_sensor = None
         self.previous_power = 0
@@ -331,6 +343,10 @@ class ChargeDischargeController:
         # Event-driven cycle rate limit: drop grid-sensor triggers that arrive
         # closer together than this, so fast meters can't flood the Modbus bridge.
         self._min_cycle_interval_s = config_entry.data.get(CONF_PD_MIN_CYCLE_INTERVAL, DEFAULT_PD_MIN_CYCLE_INTERVAL)
+        # Never cycle faster than the slowest actuator can respond, even if the user
+        # lowered the interval for a fast meter — a slow actuator driven at the sensor
+        # cadence hunts (see _actuator_latency_s).
+        self._effective_min_cycle_interval_s = max(self._min_cycle_interval_s, self._actuator_latency_s)
         self._last_cycle_monotonic = 0.0
         self.target_grid_power = config_entry.data.get(CONF_TARGET_GRID_POWER, DEFAULT_TARGET_GRID_POWER)
         # No-PD direct-tracking mode (opt-in): see _apply_no_pd_overrides. Overrides
@@ -972,7 +988,13 @@ class ChargeDischargeController:
         Idempotent: called after every parameter (re)load in __init__ and
         update_pd_parameters, so toggling the mode flips behaviour cleanly.
         """
-        self._grid_filter_tau = 0.0 if self.no_pd_mode_enabled else DEFAULT_GRID_FILTER_TAU
+        # A slow actuator gets a longer smoothing constant: a filter τ ≈ the actuator
+        # dead time slows the loop's response to match the plant, so even a 2 s safety
+        # tick moves the command only slightly each cycle and the loop stops hunting.
+        self._grid_filter_tau = (
+            0.0 if self.no_pd_mode_enabled
+            else max(DEFAULT_GRID_FILTER_TAU, self._actuator_latency_s)
+        )
 
     def update_pd_parameters(self):
         """Re-read PD controller parameters from config_entry.data (hot-reload)."""
@@ -1003,6 +1025,7 @@ class ChargeDischargeController:
         self.min_discharge_power = self.config_entry.data.get(CONF_PD_MIN_DISCHARGE_POWER, DEFAULT_PD_MIN_DISCHARGE_POWER)
         self._relay_cooldown_s = self.config_entry.data.get(CONF_PD_RELAY_COOLDOWN, DEFAULT_PD_RELAY_COOLDOWN)
         self._min_cycle_interval_s = self.config_entry.data.get(CONF_PD_MIN_CYCLE_INTERVAL, DEFAULT_PD_MIN_CYCLE_INTERVAL)
+        self._effective_min_cycle_interval_s = max(self._min_cycle_interval_s, self._actuator_latency_s)
         self.target_grid_power = self.config_entry.data.get(CONF_TARGET_GRID_POWER, DEFAULT_TARGET_GRID_POWER)
         self.enable_system_power_limits = self.config_entry.data.get(
             CONF_ENABLE_SYSTEM_POWER_LIMITS,
@@ -3081,6 +3104,21 @@ class ChargeDischargeController:
                     batt_power is not None
                     and abs(float(batt_power)) >= 0.10 * abs(net_power)
                 )
+                # Slow actuators (Zendure HTTP) never read back per-write, so the
+                # ACK-path non-delivery detection further down never runs for them.
+                # This poll-time judgment on the freshly polled battery_power is the
+                # only place a silently stalled registerless battery in a pool
+                # surfaces — feed the tracker here so it is EXCLUDED, not just
+                # re-commanded forever (the write below still re-asserts as a nudge).
+                if (
+                    batt_power is not None
+                    and not skip_write
+                    and coordinator.capabilities.actuator_latency_s
+                    > FAST_ACTUATOR_MAX_LATENCY_S
+                ):
+                    await self._check_non_delivery(
+                        coordinator, abs(net_power), float(batt_power), attempt=0,
+                    )
             if skip_write:
                 _LOGGER.debug(
                     "[%s] Power write skipped - already at force=%d charge=%dW "
@@ -3090,13 +3128,21 @@ class ChargeDischargeController:
                 )
                 return True
 
-        # Bus-load reduction: only read back (verify ACK + run non-delivery
-        # detection) every Nth real write. Option-B skips above don't reach here,
-        # so the cadence is measured in actual writes. Write-only cycles skip the
-        # 4-register readback and its settle delay.
+        # Bus-load / latency reduction: only read back (verify ACK + run non-delivery
+        # detection) every Nth real write, and never on the hot path for a slow
+        # actuator — its readback needs a multi-second settle (Zendure: ~2.5 s) that
+        # would block the shared control loop while it holds the lock. Option-B skips
+        # above don't reach here, so the cadence is measured in actual writes;
+        # write-only cycles skip the readback and its settle delay. HTTP drivers
+        # therefore never run ACK-based non-delivery detection here; the skip-write
+        # block above runs the same judgment at poll time for slow actuators so a
+        # stalled registerless battery is still excluded from the pool.
         write_count = getattr(coordinator, "_pd_write_count", 0)
         coordinator._pd_write_count = write_count + 1
-        read_back = (write_count % PD_READBACK_EVERY_N_WRITES) == 0
+        read_back = (
+            (write_count % PD_READBACK_EVERY_N_WRITES) == 0
+            and coordinator.capabilities.actuator_latency_s <= FAST_ACTUATOR_MAX_LATENCY_S
+        )
 
         # Attempt the setpoint + verify, with one retry on failure.
         # last_fail_reason carries the most specific failure category seen across
@@ -3149,84 +3195,13 @@ class ChargeDischargeController:
                         commanded_power=discharge_power,
                         actual_power=actual_power,
                     )
-                # Detect non-responsive battery: ACK ok but not delivering discharge power
+                # Detect non-responsive battery: ACK ok but not delivering discharge
+                # power. Register drivers reach this only on a readback cycle; slow
+                # actuators run the same judgment at poll time (see skip-write block).
                 if discharge_power >= 100 and charge_power == 0:
-                    actual_abs = abs(actual_power)
-                    not_delivering = actual_abs < 0.10 * discharge_power
-                    engage_started = self._discharge_engage_started.get(coordinator)
-                    within_engage_grace = (
-                        engage_started is not None
-                        and (dt_util.utcnow() - engage_started).total_seconds()
-                        < DISCHARGE_ENGAGE_GRACE_S
+                    await self._check_non_delivery(
+                        coordinator, discharge_power, actual_power, attempt=attempt,
                     )
-                    if not_delivering and within_engage_grace:
-                        # A slow inverter (Zendure HTTP) takes seconds to reverse into
-                        # discharge from charge/idle — up to ~20-30 s on a cold
-                        # charge→discharge transition. 0 W out this soon after the
-                        # direction flip is engage latency, not a fault; give it time
-                        # before judging. The flip already reset the tracker.
-                        _LOGGER.debug(
-                            "[%s] No discharge delivered yet but within %ds engage "
-                            "grace — inverter still engaging, not a fault",
-                            coordinator.name, DISCHARGE_ENGAGE_GRACE_S,
-                        )
-                    elif not_delivering:
-                        # Skip non-responsive recording when the BMS is legitimately
-                        # refusing discharge: either at/near the configured min-SOC, or
-                        # anywhere below the low-SOC protective floor where the BMS may
-                        # cut discharge on its own (e.g. a weak cell sagging under load)
-                        # even though the reported SOC is still above min_soc. 0W output
-                        # is then expected behaviour, not a fault. Low-SOC counterpart to
-                        # the high-SOC BMS-cutoff handling.
-                        current_soc = coordinator.data.get("battery_soc", 100) if coordinator.data else 100
-                        bms_cutoff_floor = max(coordinator.min_soc + 1, BMS_DISCHARGE_CUTOFF_SOC)
-                        if current_soc <= bms_cutoff_floor:
-                            _LOGGER.debug(
-                                "[%s] No discharge delivered but SOC=%.1f%% is in the BMS "
-                                "low-SOC cutoff range (min_soc=%d%%, floor=%d%%) — not a fault",
-                                coordinator.name, current_soc, coordinator.min_soc, bms_cutoff_floor,
-                            )
-                            # Comms and battery are fine, just protecting itself.
-                            self._non_responsive.clear(coordinator)
-                        else:
-                            # ACK'd but no power: separate a battery sitting in standby
-                            # (likely dropped RS485 control) from one that is awake but
-                            # still refusing.
-                            inv_state = coordinator.data.get("inverter_state") if coordinator.data else None
-                            try:
-                                is_standby = (
-                                    inv_state is not None
-                                    and int(inv_state) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
-                                )
-                            except (TypeError, ValueError):
-                                is_standby = False
-                            # High-SOC counterpart to the low-SOC BMS-cutoff exemption
-                            # above: a battery that hit the top voltage this charge
-                            # session (cells full, BMS dropped to standby) legitimately
-                            # delivers 0 W until it leaves standby. That is expected
-                            # BMS-full behaviour, not a fault, so don't exclude it from
-                            # the PD pool. top_voltage_seen clears when the battery
-                            # leaves the top zone, so the exemption is self-limiting.
-                            if is_standby and self._normal_balance_top_voltage_seen.get(coordinator, False):
-                                _LOGGER.debug(
-                                    "[%s] No discharge delivered but battery is in standby "
-                                    "after hitting top voltage this session — BMS full, not a fault",
-                                    coordinator.name,
-                                )
-                                self._non_responsive.clear(coordinator)
-                            else:
-                                reason = "standby_no_delivery" if is_standby else "non_delivery"
-                                just_excluded = self._non_responsive.record_non_delivery(
-                                    coordinator, discharge_power, actual_abs,
-                                    reason=reason, retry_attempted=attempt > 0,
-                                )
-                                # One-shot wake nudge, only at the moment of exclusion —
-                                # a last-ditch RS485 re-assert before dropping it from the pool.
-                                if just_excluded:
-                                    woke = await self._attempt_wake(coordinator)
-                                    self._non_responsive.set_wake_attempted(coordinator, woke)
-                    else:
-                        self._non_responsive.clear(coordinator)
                 return True
 
             # Readback happened but the set-points did not match (mismatch), or the
@@ -3277,6 +3252,98 @@ class ChargeDischargeController:
                 coordinator.name, last_fail_reason or "comm_failure"
             )
         return False
+
+    async def _check_non_delivery(
+        self, coordinator, discharge_power, actual_power, *, attempt,
+    ) -> None:
+        """Judge a discharge command that delivers ~0 W and feed the tracker.
+
+        Applies the engage-grace, BMS low-SOC cutoff and BMS-full standby
+        exemptions, then records a non-delivery (excluding the battery once the
+        tracker's threshold is crossed) or clears it when power is flowing.
+
+        Called from the per-write readback path (register drivers, fresh ACK
+        power) and, for slow actuators whose per-write readback is skipped, from
+        the poll-time delivery check using the last polled battery_power — so a
+        silently stalled registerless battery in a pool is excluded, not
+        re-commanded forever.
+        """
+        actual_abs = abs(actual_power)
+        if actual_abs >= 0.10 * discharge_power:
+            self._non_responsive.clear(coordinator)
+            return
+        engage_started = self._discharge_engage_started.get(coordinator)
+        within_engage_grace = (
+            engage_started is not None
+            and (dt_util.utcnow() - engage_started).total_seconds()
+            < DISCHARGE_ENGAGE_GRACE_S
+        )
+        if within_engage_grace:
+            # A slow inverter (Zendure HTTP) takes seconds to reverse into
+            # discharge from charge/idle — up to ~20-30 s on a cold
+            # charge→discharge transition. 0 W out this soon after the
+            # direction flip is engage latency, not a fault; give it time
+            # before judging. The flip already reset the tracker.
+            _LOGGER.debug(
+                "[%s] No discharge delivered yet but within %ds engage "
+                "grace — inverter still engaging, not a fault",
+                coordinator.name, DISCHARGE_ENGAGE_GRACE_S,
+            )
+            return
+        # Skip non-responsive recording when the BMS is legitimately
+        # refusing discharge: either at/near the configured min-SOC, or
+        # anywhere below the low-SOC protective floor where the BMS may
+        # cut discharge on its own (e.g. a weak cell sagging under load)
+        # even though the reported SOC is still above min_soc. 0W output
+        # is then expected behaviour, not a fault. Low-SOC counterpart to
+        # the high-SOC BMS-cutoff handling.
+        current_soc = coordinator.data.get("battery_soc", 100) if coordinator.data else 100
+        bms_cutoff_floor = max(coordinator.min_soc + 1, BMS_DISCHARGE_CUTOFF_SOC)
+        if current_soc <= bms_cutoff_floor:
+            _LOGGER.debug(
+                "[%s] No discharge delivered but SOC=%.1f%% is in the BMS "
+                "low-SOC cutoff range (min_soc=%d%%, floor=%d%%) — not a fault",
+                coordinator.name, current_soc, coordinator.min_soc, bms_cutoff_floor,
+            )
+            # Comms and battery are fine, just protecting itself.
+            self._non_responsive.clear(coordinator)
+            return
+        # ACK'd but no power: separate a battery sitting in standby
+        # (likely dropped RS485 control) from one that is awake but
+        # still refusing.
+        inv_state = coordinator.data.get("inverter_state") if coordinator.data else None
+        try:
+            is_standby = (
+                inv_state is not None
+                and int(inv_state) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
+            )
+        except (TypeError, ValueError):
+            is_standby = False
+        # High-SOC counterpart to the low-SOC BMS-cutoff exemption above: a
+        # battery that hit the top voltage this charge session (cells full, BMS
+        # dropped to standby) legitimately delivers 0 W until it leaves standby.
+        # That is expected BMS-full behaviour, not a fault, so don't exclude it
+        # from the PD pool. top_voltage_seen clears when the battery leaves the
+        # top zone, so the exemption is self-limiting.
+        if is_standby and self._normal_balance_top_voltage_seen.get(coordinator, False):
+            _LOGGER.debug(
+                "[%s] No discharge delivered but battery is in standby "
+                "after hitting top voltage this session — BMS full, not a fault",
+                coordinator.name,
+            )
+            self._non_responsive.clear(coordinator)
+            return
+        reason = "standby_no_delivery" if is_standby else "non_delivery"
+        just_excluded = self._non_responsive.record_non_delivery(
+            coordinator, discharge_power, actual_abs,
+            reason=reason, retry_attempted=attempt > 0,
+        )
+        # One-shot wake nudge, only at the moment of exclusion — a last-ditch
+        # RS485 re-assert before dropping it from the pool (no-op on drivers
+        # without RS485 control, e.g. Zendure).
+        if just_excluded:
+            woke = await self._attempt_wake(coordinator)
+            self._non_responsive.set_wake_attempted(coordinator, woke)
 
     async def _attempt_wake(self, coordinator) -> bool:
         """Toggle RS485 control off→on as a wake nudge for an unresponsive battery.
@@ -3472,13 +3539,13 @@ class ChargeDischargeController:
         # bursts. The periodic safety timer (now is a datetime) is never gated:
         # it keeps the time-based subsystems running and forces a recalc within
         # its own period. 0 = disabled.
-        if now is None and self._min_cycle_interval_s > 0:
+        if now is None and self._effective_min_cycle_interval_s > 0:
             elapsed = time.monotonic() - self._last_cycle_monotonic
-            if elapsed < self._min_cycle_interval_s:
+            if elapsed < self._effective_min_cycle_interval_s:
                 if DEBUG_CONTROL_LOOP_DETAIL:
                     _LOGGER.debug(
                         "Event trigger throttled: %.2fs since last cycle < %.2fs min interval",
-                        elapsed, self._min_cycle_interval_s,
+                        elapsed, self._effective_min_cycle_interval_s,
                     )
                 return
         if self._control_lock.locked():
@@ -3539,6 +3606,30 @@ class ChargeDischargeController:
         measured = self._measured_battery_power()
         base = measured if measured is not None else self.previous_power
         return base - error
+
+    def _feedforward_base(self, measured_power):
+        """Incremental-control base: the last command, or measured power on drift.
+
+        The PD increments from previous_power assuming the battery already delivers
+        it. For a FAST actuator (register batteries reach the setpoint within one
+        poll) that holds, so the clean command base is kept at steady state. But when
+        measured power has drifted from the command by more than the deadband — the
+        load shifted and the loop has not re-commanded yet — re-anchor to the measured
+        reality so the correction tracks the change in one step instead of integrating
+        up from a stale assumption, which also removes the command-drift windup. SLOW
+        HTTP/MQTT actuators are EXCLUDED: their telemetry lags the command by seconds,
+        so anchoring mid-ramp would repeatedly under-command and stall (same reason the
+        anti-windup re-anchor is gated). Falls back to previous_power when no battery
+        reports power yet, or when command and reality already agree (avoids injecting
+        measurement noise while tracking well).
+        """
+        if (
+            self._actuator_latency_s <= FAST_ACTUATOR_MAX_LATENCY_S
+            and measured_power is not None
+            and abs(measured_power - self.previous_power) > self.deadband
+        ):
+            return measured_power
+        return self.previous_power
 
     def _compute_pd_new_power(self, error, sensor_elapsed_s, stale_safety_recalc):
         """Incremental PD control law: anti-windup re-anchor, optional integral,
@@ -3693,7 +3784,7 @@ class ChargeDischargeController:
         pd_adjustment = P + I + D
         
         # Apply adjustment to previous power to get new target
-        new_power_raw = self.previous_power - pd_adjustment  # Minus because we're correcting the imbalance
+        new_power_raw = self._feedforward_base(measured_power) - pd_adjustment  # Minus because we're correcting the imbalance
         
         # RATE LIMITER: Prevent abrupt changes that cause overshoot. The configured
         # value is a per-cycle cap calibrated for the nominal dt; scale by real elapsed

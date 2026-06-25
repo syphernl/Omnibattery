@@ -278,6 +278,7 @@ class ZendureLocalDriver(BatteryDriver):
             has_rs485_control=False,
             has_energy_counters=False,   # no kWh / capacity in the report; synthesised
             setpoint_confirm_reliable=False,  # HTTP report echoes the previous limit for ~2 s
+            actuator_latency_s=3.0,      # HTTP write + ~2-3 s engage/echo latency
         )
 
         _excluded = _SOLAR_MPPT_KEYS if model == ZENDURE_MODEL_2400AC_PLUS else frozenset()

@@ -87,6 +87,17 @@ class DriverCapabilities:
     # than warning — the retry still confirms it. Defaults True.
     setpoint_confirm_reliable: bool = True
 
+    # Approximate worst-case time (seconds) between issuing a setpoint and the
+    # device both reaching it and reflecting the new power in its telemetry. Drives
+    # the control loop's per-driver pacing: a slow actuator gets a longer grid-filter
+    # time constant and a higher minimum cycle interval (so the loop does not fire
+    # several corrections before the first one lands — dead-time-induced oscillation),
+    # skips the multi-second-settle hot-path readback, and is excluded from the
+    # measured-power feedforward (its telemetry lags the command by seconds). A
+    # register battery reaches its setpoint well within one poll; an HTTP/MQTT
+    # actuator can take seconds. Defaults to the fast (register) case.
+    actuator_latency_s: float = 0.5
+
 
 @dataclass(frozen=True)
 class SetpointResult:

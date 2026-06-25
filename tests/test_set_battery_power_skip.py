@@ -13,6 +13,7 @@ coordinator, so no full ChargeDischargeController has to be constructed.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -37,6 +38,27 @@ def _Coord(data):
     )
 
 
+class _SlowCoord(FakeCoordinator):
+    """Zendure-like slow actuator: per-write readback is skipped, so a stalled
+    battery only surfaces at the poll-time delivery check, not via ACK."""
+
+    @property
+    def capabilities(self):
+        return replace(super().capabilities, actuator_latency_s=3.0)
+
+
+def _SlowCoordFake(data):
+    return _SlowCoord(
+        name="ZEN1",
+        is_available=True,
+        rs485_user_disabled=False,
+        balance_hold=False,
+        min_soc=10,
+        data=data,
+        apply_power=AsyncMock(),
+    )
+
+
 def _ok(net, *, confirmed=True, battery_power_w=None):
     """A successful confirmed SetpointResult, as coordinator.apply_power returns."""
     return SetpointResult(
@@ -45,7 +67,7 @@ def _ok(net, *, confirmed=True, battery_power_w=None):
 
 
 def _controller():
-    return SimpleNamespace(
+    ctrl = SimpleNamespace(
         _is_backup_function_active=lambda c: False,
         _is_manual_slot_owned=lambda c: False,
         get_charge_blockers=lambda c: {},
@@ -57,8 +79,13 @@ def _controller():
         _non_responsive=SimpleNamespace(
             record_non_delivery=lambda *a, **k: False,
             clear=lambda c: None,
+            set_wake_attempted=lambda *a, **k: None,
         ),
     )
+    # The non-delivery judgment is a real method on the controller; bind it to
+    # the stub so the readback and poll-time paths exercise the real logic.
+    ctrl._check_non_delivery = ChargeDischargeController._check_non_delivery.__get__(ctrl)
+    return ctrl
 
 
 async def test_skip_when_idle_unchanged():
@@ -201,6 +228,75 @@ async def test_readback_throttled_to_every_n_writes():
         PD_READBACK_EVERY_N_WRITES - 1
     )
     assert seen_read_back[PD_READBACK_EVERY_N_WRITES] is True
+
+
+async def test_slow_actuator_records_non_delivery_at_poll_time():
+    """A slow actuator (Zendure HTTP) skips per-write readback, so a silently
+    stalled battery never reaches the ACK-path detection. The poll-time check
+    must record it (toward exclusion) instead of re-commanding it forever."""
+    coord = _SlowCoordFake({
+        "force_mode": 2,
+        "set_charge_power": 0,
+        "set_discharge_power": 300,
+        "battery_power": 0,   # ACK'd earlier but now delivering nothing
+        "battery_soc": 80,    # above BMS cutoff floor -> real fault, not protection
+        "inverter_state": None,
+    })
+    # Write-only cycle for a slow actuator (read_back=False): confirmed irrelevant.
+    coord.apply_power = AsyncMock(return_value=SetpointResult(
+        ok=True, net_power_w=-300, confirmed=False, battery_power_w=None,
+    ))
+    ctrl = _controller()
+    ctrl._last_commanded_net_sign[coord] = -1  # steady state, past engage grace
+    record = MagicMock(return_value=False)
+    ctrl._non_responsive.record_non_delivery = record
+
+    result = await ChargeDischargeController._set_battery_power(ctrl, coord, 0, 300)
+
+    assert result is True
+    record.assert_called_once()             # tracked toward exclusion at poll time
+    coord.apply_power.assert_called_once()  # still re-asserts as a wake nudge
+
+
+async def test_slow_actuator_skips_when_delivering():
+    """A delivering slow actuator is in-state: skip the write, never record."""
+    coord = _SlowCoordFake({
+        "force_mode": 2,
+        "set_charge_power": 0,
+        "set_discharge_power": 300,
+        "battery_power": -300,  # delivering
+    })
+    ctrl = _controller()
+    record = MagicMock(return_value=False)
+    ctrl._non_responsive.record_non_delivery = record
+
+    result = await ChargeDischargeController._set_battery_power(ctrl, coord, 0, 300)
+
+    assert result is True
+    coord.apply_power.assert_not_called()
+    record.assert_not_called()
+
+
+async def test_slow_actuator_no_record_when_battery_power_unknown():
+    """Pre-first-poll: no battery_power reading yet. Must not record a false
+    non-delivery, which would wrongly exclude a healthy battery."""
+    coord = _SlowCoordFake({
+        "force_mode": 2,
+        "set_charge_power": 0,
+        "set_discharge_power": 300,
+        # battery_power absent
+    })
+    coord.apply_power = AsyncMock(return_value=SetpointResult(
+        ok=True, net_power_w=-300, confirmed=False, battery_power_w=None,
+    ))
+    ctrl = _controller()
+    record = MagicMock(return_value=False)
+    ctrl._non_responsive.record_non_delivery = record
+
+    result = await ChargeDischargeController._set_battery_power(ctrl, coord, 0, 300)
+
+    assert result is True
+    record.assert_not_called()
 
 
 async def test_no_skip_when_data_missing():
