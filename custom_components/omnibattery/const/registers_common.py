@@ -19,6 +19,7 @@ REGISTER_MAP = {
         "battery_soc": 32104,
         "battery_power": 32102,
         "user_work_mode": None,
+        "backup_function": 41200,
     },
     "v3": {
         "rs485_control": 42000,
@@ -32,6 +33,7 @@ REGISTER_MAP = {
         "battery_soc": 37005,
         "battery_power": 30001,
         "user_work_mode": None,
+        "backup_function": 41200,
     },
     "vA": {
         "rs485_control": 42000,
@@ -45,6 +47,7 @@ REGISTER_MAP = {
         "battery_soc": 32104,
         "battery_power": 30001,
         "user_work_mode": None,
+        "backup_function": 41200,
     },
     "vD": {
         "rs485_control": 42000,
@@ -58,6 +61,7 @@ REGISTER_MAP = {
         "battery_soc": 32104,
         "battery_power": 30001,
         "user_work_mode": None,
+        "backup_function": 41200,
     },
 }
 
