@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Battery stuck in standby near full SOC never recovered automatically**: b2's #434 fix made the non-responsive wake nudge only re-assert RS485 (no reconnect) everywhere, but a battery already in standby with RS485 reading enabled needs the same fresh reconnection an HA restart does — a register write alone doesn't unstick it. That case now reconnects fresh directly instead of guessing with a register toggle. [`__init__.py`](custom_components/omnibattery/__init__.py).
+
 ## [1.0.0b2] - 2026-07-01
 
 ### Fixed
