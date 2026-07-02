@@ -1011,6 +1011,9 @@
       "excluded_device_solar_surplus": {
         "name": "{device} – Excedent Solar"
       },
+      "excluded_device_cover_home": {
+        "name": "{device} – Cobrir la Llar"
+      },
       "time_slot": {
         "name": "Franja Horària {slot_number}"
       },

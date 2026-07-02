@@ -1011,6 +1011,9 @@
       "excluded_device_solar_surplus": {
         "name": "{device} – Solarüberschuss"
       },
+      "excluded_device_cover_home": {
+        "name": "{device} – Haus decken"
+      },
       "time_slot": {
         "name": "Zeitfenster {slot_number}"
       },
