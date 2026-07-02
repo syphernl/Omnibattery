@@ -993,6 +993,9 @@
       "excluded_device_solar_surplus": {
         "name": "{device} – Solar Surplus"
       },
+      "excluded_device_cover_home": {
+        "name": "{device} – Cover Home"
+      },
       "time_slot": {
         "name": "Time Slot {slot_number}"
       },

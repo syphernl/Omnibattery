@@ -2,6 +2,8 @@
 
 ## [1.0.0b4] - 2026-07-02
 
+### Added
+- **"Cover Home" switch per excluded device** (#42): opt-in so the battery covers the home's own load while a solar-surplus device (e.g. an AC) runs, importing from grid only for the device itself, instead of sitting idle. Default OFF keeps the #421 home-first behavior. [`infra/external_loads.py`](custom_components/omnibattery/infra/external_loads.py), [`switch.py`](custom_components/omnibattery/switch.py).
 ### Fixed
 - **Idle-runaway detector tripped on every discharge→idle transition**: right after commanding idle, the set-points already read standby while `battery_power` telemetry still shows the old discharge ramping down (actuator settle + poll grain), so ordinary transitions fired the #434 RS485 re-assert dozens of times a day. The runaway judgment now waits out a 15 s ramp-down grace after the flip to idle; a genuine runaway still trips, just that much later. [`__init__.py`](custom_components/omnibattery/__init__.py).
 

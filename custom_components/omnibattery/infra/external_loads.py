@@ -148,14 +148,18 @@ class ExternalLoads:
         # base_load = home_consumption − Σ(in-home excluded devices); the surplus
         # is a shared budget so multiple surplus devices don't each claim it all.
         # None = Home Consumption unavailable → conservative full exclusion below.
+        # solar_remaining tracks the FULL PV left (before the home reservation) so a
+        # device with cover_home_when_active can be offset by raw PV (pre-#415 rule),
+        # letting the battery cover the home deficit instead of sitting idle (#42).
         surplus_remaining: float | None = None
+        solar_remaining = self._read_sensor_w(solar_sensor_id) if solar_sensor_id else 0.0
         if solar_sensor_id:
             home_w = self._read_sensor_w_opt(
                 getattr(self._controller, "home_consumption_sensor", None)
             )
             if home_w is not None:
                 base_load = max(0.0, home_w - self._included_device_power_w())
-                surplus_remaining = max(0.0, self._read_sensor_w(solar_sensor_id) - base_load)
+                surplus_remaining = max(0.0, solar_remaining - base_load)
 
         total_adjustment = 0.0
         included_adjustment = 0.0  # Track included_in_consumption portion separately
@@ -192,20 +196,28 @@ class ExternalLoads:
                             # first, then exclude only the grid portion it must import.
                             # The battery covers the home deficit and charges any surplus
                             # the device can't absorb, never discharging for the device.
-                            if surplus_remaining is None:
+                            cover_home = device.get("cover_home_when_active", False)
+                            if surplus_remaining is None and not cover_home:
                                 # Home Consumption unavailable → exclude fully (battery
                                 # never powers the device; conservative fallback).
                                 grid_portion = device_power * factor
                             else:
-                                offset = min(device_power, surplus_remaining)
-                                surplus_remaining -= offset
+                                # cover_home devices draw from raw PV (pre-#415): only
+                                # their real grid draw max(0, device − solar) is excluded,
+                                # so the battery covers the remaining home deficit (#42).
+                                # Normal devices draw the home-reserved surplus (#421).
+                                avail = solar_remaining if cover_home else surplus_remaining
+                                offset = min(device_power, avail)
+                                solar_remaining = max(0.0, solar_remaining - offset)
+                                if surplus_remaining is not None:
+                                    surplus_remaining = max(0.0, surplus_remaining - offset)
                                 grid_portion = (device_power - offset) * factor
                             total_adjustment += grid_portion
                             included_adjustment += grid_portion
                             _LOGGER.debug(
                                 "Excluded device %s consuming %.1fW → excluding %.1fW "
-                                "(PV-surplus priority, surplus_left=%s)",
-                                power_sensor, device_power, grid_portion, surplus_remaining,
+                                "(PV-surplus priority, cover_home=%s, surplus_left=%s)",
+                                power_sensor, device_power, grid_portion, cover_home, surplus_remaining,
                             )
                         else:
                             # No solar sensor: block discharge instead (battery idle while device active)

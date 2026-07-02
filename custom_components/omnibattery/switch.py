@@ -114,6 +114,7 @@ async def async_setup_entry(
     for index in range(len(excluded_devices)):
         entities.append(ExcludedDeviceEnabledSwitch(hass, entry, index))
         entities.append(ExcludedDeviceSolarSurplusSwitch(hass, entry, index))
+        entities.append(ExcludedDeviceCoverHomeSwitch(hass, entry, index))
 
     async_add_entities(entities)
 
@@ -848,6 +849,90 @@ class ExcludedDeviceSolarSurplusSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs) -> None:
         """Disable solar surplus priority (battery charges normally)."""
         await self._update_solar_surplus(False)
+
+    @property
+    def device_info(self):
+        """Return device information for the system."""
+        return {
+            "identifiers": {(DOMAIN, "marstek_venus_system")},
+            "name": "Omnibattery System",
+            "manufacturer": "Omnibattery",
+            "model": "Multi-Battery System",
+        }
+
+
+class ExcludedDeviceCoverHomeSwitch(SwitchEntity):
+    """Toggle "battery covers home deficit while this device is active" (#42).
+
+    Only meaningful together with Solar Surplus + a solar sensor. When ON, the
+    device is offset by raw PV (pre-#415 rule) so only its real grid draw
+    max(0, device − solar) is excluded, and the battery discharges to cover the
+    remaining home base load instead of sitting idle. When OFF (default), the
+    #421 home-first rule applies and the battery never discharges while the
+    device is active.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, index: int) -> None:
+        """Initialize the cover-home switch."""
+        self.hass = hass
+        self.entry = entry
+        self._device_index = index
+
+        device = entry.data.get("excluded_devices", [])[index]
+        sensor_id = device.get("power_sensor", "")
+        friendly = sensor_id.replace("sensor.", "").replace("_", " ").title()
+
+        self._attr_has_entity_name = True
+        self._attr_translation_key = "excluded_device_cover_home"
+        self._attr_translation_placeholders = {"device": friendly}
+        self._attr_unique_id = f"{SYSTEM_UNIQUE_ID_PREFIX}cover_home_{index}"
+        self.entity_id = system_entity_id("switch", f"cover_home_{index}")
+        self._attr_icon = "mdi:home-lightning-bolt"
+        self._attr_should_poll = False
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if the battery covers the home deficit for this device."""
+        devices = self.entry.data.get("excluded_devices", [])
+        if self._device_index < len(devices):
+            return devices[self._device_index].get("cover_home_when_active", False)
+        return False
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return the power sensor entity as an attribute."""
+        devices = self.entry.data.get("excluded_devices", [])
+        if self._device_index >= len(devices):
+            return {}
+        device = devices[self._device_index]
+        return {
+            "power_sensor": device.get("power_sensor", ""),
+            "allow_solar_surplus": device.get("allow_solar_surplus", False),
+        }
+
+    async def _update_cover_home(self, enabled: bool) -> None:
+        """Update cover_home_when_active for this device in config_entry.data."""
+        new_data = dict(self.entry.data)
+        devices = [dict(d) for d in new_data.get("excluded_devices", [])]
+        if self._device_index < len(devices):
+            devices[self._device_index]["cover_home_when_active"] = enabled
+            new_data["excluded_devices"] = devices
+            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+            _LOGGER.info(
+                "Cover-home for device %d (%s) %s",
+                self._device_index + 1,
+                devices[self._device_index].get("power_sensor", ""),
+                "enabled" if enabled else "disabled",
+            )
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable cover-home (battery covers the home deficit for this device)."""
+        await self._update_cover_home(True)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable cover-home (#421 home-first: battery idle while device active)."""
+        await self._update_cover_home(False)
 
     @property
     def device_info(self):

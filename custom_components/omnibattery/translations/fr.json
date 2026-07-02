@@ -1011,6 +1011,9 @@
       "excluded_device_solar_surplus": {
         "name": "{device} – Surplus Solaire"
       },
+      "excluded_device_cover_home": {
+        "name": "{device} – Couvrir Maison"
+      },
       "time_slot": {
         "name": "Plage Horaire {slot_number}"
       },

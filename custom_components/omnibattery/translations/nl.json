@@ -1011,6 +1011,9 @@
       "excluded_device_solar_surplus": {
         "name": "{device} – Zonne-overschot"
       },
+      "excluded_device_cover_home": {
+        "name": "{device} – Huis dekken"
+      },
       "time_slot": {
         "name": "Tijdslot {slot_number}"
       },

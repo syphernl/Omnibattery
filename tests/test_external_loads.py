@@ -253,6 +253,46 @@ def test_adjustment_pv_priority_shared_budget_across_two_devices():
     assert loads.calculate_adjustment() == pytest.approx(1500.0)  # 500 + 1000
 
 
+# cover_home_when_active (#42): opt-in pre-#415 rule. The device is offset by raw
+# PV, so only its real grid draw max(0, device − solar) is excluded and the
+# battery covers the remaining home deficit instead of sitting idle.
+
+def test_adjustment_cover_home_battery_covers_home_deficit():
+    # Live #42 numbers: AC=2411, solar=1415, home=3000 (base ~589).
+    # cover_home ON → exclude max(0, 2411−1415)=996 (not the #421 value 1500),
+    # so sensor_actual leaves base_load ~589 for the battery to discharge.
+    loads = _surplus_loads(2411, 1415, 3000, cover_home_when_active=True)
+    assert loads.calculate_adjustment() == pytest.approx(996.0)
+
+
+def test_adjustment_cover_home_device_fully_solar_covered_excludes_nothing():
+    # solar ≥ device → device imports nothing → exclusion 0 → battery covers all
+    # of the home deficit. (The #421 default would exclude a positive grid_portion.)
+    loads = _surplus_loads(2000, 2600, 2976, cover_home_when_active=True)
+    assert loads.calculate_adjustment() == pytest.approx(0.0)
+
+
+def test_adjustment_cover_home_off_is_unchanged_421_behavior():
+    # Same numbers as the #421 pinned test but with the flag explicitly OFF:
+    # default home-first rule still excludes 2438 (battery idle). No regression.
+    loads = _surplus_loads(3419, 2000, 4438, cover_home_when_active=False)
+    assert loads.calculate_adjustment() == pytest.approx(2438.0)
+
+
+def test_adjustment_cover_home_no_home_sensor_still_uses_raw_pv():
+    # Home Consumption down: #421 falls back to full exclusion, but cover_home
+    # only needs solar → still excludes just max(0, device − solar).
+    loads = _controller(
+        [_device(included_in_consumption=True, allow_solar_surplus=True,
+                 cover_home_when_active=True)],
+        {"sensor.dev": _state(2411), "sensor.solar": _state(1415),
+         "sensor.home": _state("unavailable")},
+        solar_production_sensor="sensor.solar",
+        home_consumption_sensor="sensor.home",
+    )
+    assert loads.calculate_adjustment() == pytest.approx(996.0)
+
+
 def test_adjustment_included_no_surplus_kw_sensor_converted_correctly():
     # 1.5 kW sensor → adjustment should be 1500 W
     loads = _controller(
