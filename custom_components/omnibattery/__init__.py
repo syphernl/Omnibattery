@@ -3155,16 +3155,23 @@ class ChargeDischargeController:
         if not force_write and current_net is not None and current_net == net_power:
             skip_write = True
             if net_power == 0:
-                # Commanded idle but the battery is actually moving power means it
+                # Commanded idle but the battery is actually discharging means it
                 # has slipped out of RS485 forced mode into its own internal logic
                 # (a v3 reverts to its app mode and can export to grid this way —
                 # issue #434). The matching standby set-points are not trustworthy:
                 # fall through to a real standby write so the battery is pinned back
                 # to idle instead of running free.
+                #
+                # Only a *discharge* (export) is a runaway. Charging while idle is
+                # harmless — on a DC-coupled vA/vD the battery_power register lumps
+                # in the DC PV feeding the bus (see BATTERY_CELL_POWER_SENSOR_
+                # DEFINITIONS), so a unit resting at idle while absorbing its own
+                # solar reads positive; forcing standby there would dump that PV to
+                # grid. Sign: + charge / - discharge.
                 batt_power = data.get("battery_power")
                 if (
                     batt_power is not None
-                    and abs(float(batt_power)) >= IDLE_RUNAWAY_POWER_W
+                    and float(batt_power) <= -IDLE_RUNAWAY_POWER_W
                 ):
                     skip_write = False
                     # Wake/re-assert only once per runaway episode. A v3 that
@@ -3181,9 +3188,9 @@ class ChargeDischargeController:
                     ):
                         self._idle_runaway_handled[coordinator] = True
                         _LOGGER.warning(
-                            "[%s] Commanded idle but delivering %.0fW — re-asserting "
+                            "[%s] Commanded idle but discharging %.0fW — re-asserting "
                             "RS485 control and forcing standby",
-                            coordinator.name, float(batt_power),
+                            coordinator.name, abs(float(batt_power)),
                         )
                         await self._attempt_wake(coordinator)
                         return True

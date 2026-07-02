@@ -120,6 +120,28 @@ async def test_no_skip_when_idle_but_delivering():
     wake.assert_awaited_once_with(coord)
 
 
+async def test_no_wake_when_idle_but_charging_from_solar():
+    """Commanded idle while the battery reads *positive* power is not a runaway:
+    on a DC-coupled vA/vD the battery_power register lumps in the DC PV feeding
+    the bus, so a unit resting at idle while absorbing its own solar reads +W.
+    Forcing standby there would dump that PV to grid — must skip, not wake."""
+    coord = _Coord({
+        "force_mode": 0,
+        "set_charge_power": 0,
+        "set_discharge_power": 0,
+        "battery_power": 1213,  # charging from own MPPT while grid is balanced
+    })
+    ctrl = _controller()
+    wake = AsyncMock(return_value=True)
+    ctrl._attempt_wake = wake
+
+    result = await ChargeDischargeController._set_battery_power(ctrl, coord, 0, 0)
+
+    assert result is True
+    wake.assert_not_awaited()
+    coord.apply_power.assert_not_called()  # skipped, set-points already at standby
+
+
 async def test_idle_runaway_wake_fires_once_per_episode():
     """The wake must fire once per runaway episode, not every cycle — re-asserting
     every ~2 s is what floods the log without recovering the battery."""
