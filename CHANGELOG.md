@@ -21,6 +21,8 @@
 
 ### Changed
 - **PV-surplus charge delay scores the whole charge window, not just the start hour** (#18): the cheapest-price release (#12) picked the single cheapest *starting* slot, but the charge runs across several slots, so a cheap start followed by pricey hours could sacrifice more export than a slightly dearer start inside a sustained trough. Each candidate start is now scored by the duration-weighted average price over `[start, start + charge_time_h]`, landing the whole charge in the cheapest sustained block; a window running past the available price data is skipped so an incomplete tail can't score as artificially cheap. The grid-deficit path (no defined charge length) keeps the legacy single-slot behaviour, and SOC safety is untouched — release only ever moves earlier. Thanks to @syphernl for the contribution. [`control/charge_delay.py`](custom_components/omnibattery/control/charge_delay.py), [`pricing/engine.py`](custom_components/omnibattery/pricing/engine.py).
+- **Faster response to load bursts (e.g. a kettle)**: the grid-sample filter now passes large steps straight through instead of smoothing them over seconds, since a multi-hundred-watt jump is a real load change, not sensor noise. [`__init__.py`](custom_components/omnibattery/__init__.py).
+- **Fresher battery power feedback after a command change**: for a few seconds after the controller writes a new power setpoint, the delivered-power reading polls at 1 s instead of 2 s, so the control loop sees the actuator's ramp sooner. [`infra/coordinator.py`](custom_components/omnibattery/infra/coordinator.py).
 
 ## [1.0.0b1] - 2026-06-29
 

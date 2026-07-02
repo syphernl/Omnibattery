@@ -15,9 +15,11 @@ To opt a future test into loading the integration, request the
 from __future__ import annotations
 
 import sys
+import time
 
 import pytest
 
+from custom_components.omnibattery.const import BURST_POLL_WINDOW_S
 from custom_components.omnibattery.drivers import DriverCapabilities
 
 
@@ -130,6 +132,7 @@ class FakeCoordinator:
         "apply_power": None,
         "set_charge_cutoff": None,
         "write_control": None,
+        "boost_fast_poll_until": 0.0,
     }
 
     def __init__(self, **kw):
@@ -141,6 +144,11 @@ class FakeCoordinator:
             )
         for key, default in self._DEFAULTS.items():
             setattr(self, key, kw.get(key, default))
+
+    def start_burst_poll(self) -> None:
+        """Mirror MarstekVenusDataUpdateCoordinator.start_burst_poll (real method,
+        not a constructor default, so _set_battery_power can call it unconditionally)."""
+        self.boost_fast_poll_until = time.monotonic() + BURST_POLL_WINDOW_S
 
     @property
     def driver(self) -> _FakeMarstekDriver:

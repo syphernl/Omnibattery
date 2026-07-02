@@ -222,6 +222,13 @@ BMS_DISCHARGE_CUTOFF_SOC = 20                  # %: below this, refused discharg
 # delivering are caught up to N writes later instead of immediately.
 PD_READBACK_EVERY_N_WRITES = 5
 
+# Transient burst poll: right after a REAL power command change, the delivered-
+# power reading (ac_power / battery_power) is polled at this cadence instead of
+# its normal "high" scan interval, so _measured_battery_power() isn't stale
+# during the actuator ramp. Bounded window — sustained bus load is unaffected.
+BURST_POLL_WINDOW_S = 6.0
+BURST_POLL_INTERVAL_S = 1.0
+
 # An actuator at or below this latency (seconds, DriverCapabilities.actuator_latency_s)
 # reaches its setpoint and reflects it in telemetry within one poll. Such drivers do
 # the hot-path readback and use the measured-power feedforward; slower ones (Zendure

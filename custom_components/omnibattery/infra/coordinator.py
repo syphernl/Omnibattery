@@ -1,6 +1,7 @@
 """Data update coordinator for the Marstek Venus Energy Manager integration."""
 import asyncio
 import logging
+import time
 from datetime import timedelta, datetime
 
 from homeassistant.core import HomeAssistant
@@ -16,6 +17,8 @@ from ..const import (
     CONF_ACTIVE_BALANCE_MODE_ENABLED,
     CONF_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
     DEFAULT_FULL_CHARGE_VOLTAGE_TAPER_ENABLED,
+    BURST_POLL_WINDOW_S,
+    BURST_POLL_INTERVAL_S,
 )
 from ..drivers.marstek import MarstekModbusDriver
 from ..drivers.zendure import ZendureLocalDriver, ZENDURE_MODEL_2400AC_PRO
@@ -23,6 +26,34 @@ from ..drivers.base import SetpointResult
 from .alarm_notifier import AlarmNotifier
 
 _LOGGER = logging.getLogger(__name__)
+
+# Logical telemetry keys _measured_battery_power() / _coordinator_delivered_power()
+# read to see what a battery is actually delivering (see __init__.py). A read
+# group is boosted to the transient fast-poll cadence only if it contains one of
+# these — the burst poll must not accelerate unrelated registers.
+_DELIVERED_POWER_KEYS = frozenset({"ac_power", "battery_power"})
+
+
+def group_scan_interval_s(
+    group_keys: tuple[str, ...],
+    nominal_interval_s: float,
+    boost_fast_poll_until: float,
+    now_monotonic: float,
+) -> float:
+    """Effective poll interval (s) for one read group, honouring a burst-poll boost.
+
+    While ``now_monotonic`` is within the transient window set by a real power
+    command change (see ``MarstekVenusDataUpdateCoordinator.start_burst_poll``),
+    a group carrying a delivered-power key polls at ``BURST_POLL_INTERVAL_S``
+    instead of its normal interval, so the control loop's measured-power feedback
+    isn't stale during the actuator ramp. Groups without a delivered-power key are
+    unaffected.
+    """
+    if now_monotonic < boost_fast_poll_until and any(
+        key in _DELIVERED_POWER_KEYS for key in group_keys
+    ):
+        return BURST_POLL_INTERVAL_S
+    return nominal_interval_s
 
 
 def is_untrusted_energy_reading(key: str, value, prev) -> bool:
@@ -155,6 +186,10 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
         self._scan_counter = 0
         self.lock = asyncio.Lock()
         self._is_shutting_down = False  # Flag to suppress errors during shutdown
+
+        # Transient burst-poll deadline (time.monotonic()); see start_burst_poll().
+        # 0 = no boost active.
+        self.boost_fast_poll_until = 0.0
 
         # Alarm/fault notifications (owns its own previous-bit state)
         self._alarm_notifier = AlarmNotifier(hass, name)
@@ -364,6 +399,16 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
         self._is_shutting_down = value
         self.driver.set_shutting_down(value)
 
+    def start_burst_poll(self) -> None:
+        """Arm the transient fast-poll window (see ``group_scan_interval_s``).
+
+        Called by the control loop right after a REAL power command change (not
+        the skip-if-unchanged path), so the delivered-power reading refreshes at
+        ``BURST_POLL_INTERVAL_S`` for ``BURST_POLL_WINDOW_S`` while the actuator
+        ramps to the new setpoint.
+        """
+        self.boost_fast_poll_until = time.monotonic() + BURST_POLL_WINDOW_S
+
     def set_rs485_user_disabled(self, value: bool) -> None:
         """Set rs485_user_disabled and persist the value to config entry data."""
         self.rs485_user_disabled = value
@@ -516,10 +561,15 @@ class MarstekVenusDataUpdateCoordinator(DataUpdateCoordinator):
                 continue
 
             # Skip the group if it was read within its interval (the group's key
-            # tuple is its stable identity for scheduling).
+            # tuple is its stable identity for scheduling). A delivered-power group
+            # polls faster for a few seconds after a real command change (burst
+            # poll — see start_burst_poll / group_scan_interval_s).
+            effective_interval = group_scan_interval_s(
+                group.keys, interval, self.boost_fast_poll_until, time.monotonic()
+            )
             last_update = self._last_update_times.get(group.keys)
             elapsed = (now - last_update).total_seconds() if last_update else None
-            if elapsed is not None and elapsed < interval:
+            if elapsed is not None and elapsed < effective_interval:
                 sensors_skipped_interval += 1
                 continue
 

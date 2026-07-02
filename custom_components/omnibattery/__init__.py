@@ -3199,6 +3199,13 @@ class ChargeDischargeController:
                 )
                 return True
 
+        # A real write that changes the commanded power is about to be issued below:
+        # arm the transient burst poll so the delivered-power reading refreshes
+        # faster while the actuator ramps to the new setpoint (see
+        # start_burst_poll / group_scan_interval_s in infra/coordinator.py).
+        if current_net != net_power:
+            coordinator.start_burst_poll()
+
         # Bus-load / latency reduction: only read back (verify ACK + run non-delivery
         # detection) every Nth real write, and never on the hot path for a slow
         # actuator — its readback needs a multi-second settle (Zendure: ~2.5 s) that
@@ -3609,13 +3616,24 @@ class ChargeDischargeController:
         the variable event-driven cadence. The first sample seeds the filter directly.
         elapsed_s == 0 (a stale recalculation, no new data) leaves the value unchanged;
         elapsed_s None (callers that don't track elapsed) falls back to the nominal dt.
+
+        Adaptive collapse: the EMA is tuned to smooth sensor noise (tens of W), not
+        to react to a genuine load step (a kettle/EV charger swinging kW). When the
+        raw sample deviates from the current EMA by more than the step threshold,
+        it is not noise — smoothing it would only add multi-second lag to a real
+        step — so the EMA snaps straight to the raw value (alpha = 1) instead of
+        blending.
         """
         if self._grid_filter_ema is None:
             self._grid_filter_ema = sensor_raw
         elif elapsed_s is None or elapsed_s > 0:
-            dt = elapsed_s if (elapsed_s is not None and elapsed_s > 0) else self.dt
-            alpha = dt / (self._grid_filter_tau + dt)
-            self._grid_filter_ema += alpha * (sensor_raw - self._grid_filter_ema)
+            step_threshold = max(3 * self.deadband, 200.0)
+            if abs(sensor_raw - self._grid_filter_ema) > step_threshold:
+                self._grid_filter_ema = sensor_raw
+            else:
+                dt = elapsed_s if (elapsed_s is not None and elapsed_s > 0) else self.dt
+                alpha = dt / (self._grid_filter_tau + dt)
+                self._grid_filter_ema += alpha * (sensor_raw - self._grid_filter_ema)
         return self._grid_filter_ema
 
     async def async_update_charge_discharge(self, now=None):
