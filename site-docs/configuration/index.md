@@ -23,16 +23,19 @@ flowchart TD
     K --> L{Solar charge delay?}
     L -- Yes --> M[8. Solar charge delay config]
     L -- No --> N
-    M --> N{Capacity protection?}
-    N -- Yes --> O[9. Capacity protection config]
-    N -- No --> P
-    O --> P{Hourly net balance?}
-    P -- Yes --> Q[10. Hourly net balance config]
+    M --> N{Temperature charge limit?}
+    N -- Yes --> O[9. Temperature charge limit]
+    N -- No --> P  
+    O --> P{Capacity protection?}
+    P -- Yes --> Q[10. Capacity protection config]
     P -- No --> R
-    Q --> R{PD controller advanced?}
-    R -- Yes --> S[11. PD controller advanced config]
-    R -- No --> T[Done]
-    S --> T
+    Q --> R{Hourly net balance?}
+    R -- Yes --> S[11. Hourly net balance config]
+    R -- No --> T
+    S --> T{PD controller advanced?}
+    T -- Yes --> U[12. PD controller advanced config]
+    T -- No --> W
+    U --> W[Done]
 ```
 
 | Step | Description | Required |
@@ -45,6 +48,7 @@ flowchart TD
 | [Predictive charging](predictive-charging/index.md) | Grid charging when solar forecast is insufficient | ❌ |
 | [Weekly full charge](advanced.md) | Charge batteries to 100% once a week to balance the cells | ❌ |
 | [Solar charge delay](advanced.md) | Avoid to charge the batteries early if expected solar production will suffice | ❌ |
+| [Temperature charge limit](advanced.md) | Linear derate charge/discharge power based on battery temperature | ❌ |
 | [Capacity protection](advanced.md) | Reserves a portion of battery capacity for demand spikes (peak shaving) | ❌ |
 | [Hourly net balance](advanced.md) | Sets the hourly net import/export energy to a specific target (default 0 Wh) | ❌ |
 | [PD controller (advanced)](advanced.md) | Finetune the PD controller to keep the grid flow to the configured target | ❌ |
@@ -54,4 +58,4 @@ flowchart TD
 Once installed, any parameter can be changed at:
 **Settings → Devices & Services → Omnibattery → Configure**
 
-![Reconfigure Omnibattery](../assets/screenshots/configuration/reconfigure-marstek-venus-energy-manager.png){ width="650" style="display: block; margin: 0 auto;"}
+![Reconfigure Omnibattery](../assets/screenshots/configuration/reconfigure-omnibattery.png){ width="650" style="display: block; margin: 0 auto;"}
