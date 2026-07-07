@@ -9,6 +9,8 @@ Charges from the grid during a **fixed time window** (typically cheap overnight 
 | **Charging window 1** | Start and end of the first charging slot (e.g. `02:00` – `05:00`), plus the days of the week it applies |
 | **Charging windows 2 & 3** | (Optional) Up to two more windows, each with its own start/end and days |
 | **Solar forecast sensor** | Current-day production sensor in kWh (optional) |
+| **Solar forecast safety margin (kWh)** | Extra energy buffer added to consumption forecast before deciding whether to charge (default 0 kWh) |
+| **Predictive grid charge margin (%)** | Extra % charged from the grid on top of the solar deficit (default 0%) |
 
 !!! note "Up to 3 windows"
     You can configure 1, 2 or 3 charging windows — useful for a split tariff with both a night and a midday off-peak block. Fill only window 1 for the previous single-window behaviour; each extra window needs **both** a start and an end time (fill both or leave both empty). The consumption-window math treats the union of all configured windows.
