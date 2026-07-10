@@ -424,6 +424,7 @@ class PredictiveChargingSwitch(SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         """Enable predictive charging (set enabled, clear override)."""
+        was_enabled = self.controller.predictive_charging_enabled
         self.controller.predictive_charging_enabled = True
         self.controller.predictive_charging_overridden = False
         new_data = dict(self.entry.data)
@@ -436,10 +437,11 @@ class PredictiveChargingSwitch(SwitchEntity):
             {"notification_id": f"{NOTIFICATION_ID_PREFIX}predictive_charging_override"},
         )
         _LOGGER.info("Predictive charging enabled")
-        self.async_write_ha_state()
+        await self._apply_enabled_change(was_enabled, now_enabled=True)
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable predictive charging (clear enabled, set override)."""
+        was_enabled = self.controller.predictive_charging_enabled
         self.controller.predictive_charging_enabled = False
         self.controller.predictive_charging_overridden = True
         new_data = dict(self.entry.data)
@@ -460,7 +462,21 @@ class PredictiveChargingSwitch(SwitchEntity):
             },
         )
         _LOGGER.info("Predictive charging disabled (overridden)")
-        self.async_write_ha_state()
+        await self._apply_enabled_change(was_enabled, now_enabled=False)
+
+    async def _apply_enabled_change(self, was_enabled: bool, *, now_enabled: bool) -> None:
+        """Finish a toggle. When the ``enabled`` value flips, reload the entry so
+        the setup-time gating re-evaluates: the daily consumption-capture and
+        dynamic-pricing schedules and the predictive status sensor are all armed
+        (or torn down) only in ``async_setup_entry`` against this value, and the
+        entry-update listener does not reload. This mirrors the options flow,
+        which reloads on the same change. When only the runtime override moved
+        (a legacy paused entry resuming with ``enabled`` already True), a plain
+        state write suffices and avoids a needless reload."""
+        if was_enabled != now_enabled:
+            await self.hass.config_entries.async_reload(self.entry.entry_id)
+        else:
+            self.async_write_ha_state()
 
     @property
     def device_info(self):
