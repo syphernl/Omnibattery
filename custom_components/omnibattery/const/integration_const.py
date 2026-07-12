@@ -229,6 +229,21 @@ PD_READBACK_EVERY_N_WRITES = 5
 BURST_POLL_WINDOW_S = 6.0
 BURST_POLL_INTERVAL_S = 1.0
 
+# Feedforward step detection (PD mode): a confirmed load step (kettle/oven-sized)
+# is covered with ONE deadbeat cycle (measured - error, same law as no-PD mode)
+# instead of the ~13 s exponential approach of the incremental P term; the PD
+# resumes fine adjustment from the new operating point on the next cycle.
+# Detection is 2-sample: an error jump beyond max(5*deadband, floor) arms a
+# candidate, and it only fires if the next sample still shows the deviation
+# (same sign, >= confirm ratio of the jump) — a 1-sample excursion is a meter
+# spike and is rejected. Hardcoded on purpose (no config entities), same policy
+# as the adaptive filter / burst poll above.
+FEEDFORWARD_STEP_FLOOR_W = 400        # W: minimum error jump to arm a candidate
+FEEDFORWARD_CONFIRM_RATIO = 0.8       # fraction of the jump that must persist next sample
+FEEDFORWARD_CANDIDATE_MAX_AGE_S = 5.0 # s: candidate expires if not checked in time (deadband gap)
+FEEDFORWARD_COOLDOWN_S = 10.0         # s: min spacing between fires (covers actuator ramp 3-6s)
+FEEDFORWARD_PULSE_GUARD_S = 30.0      # s: opposite-sign step this soon after a fire = pulsing load, skip
+
 # An actuator at or below this latency (seconds, DriverCapabilities.actuator_latency_s)
 # reaches its setpoint and reflects it in telemetry within one poll. Such drivers do
 # the hot-path readback and use the measured-power feedforward; slower ones (Zendure

@@ -133,6 +133,11 @@ from .const import (
     NORMAL_BALANCE_RECAL_INVERTER_STANDBY,
     BMS_DISCHARGE_CUTOFF_SOC,
     PD_READBACK_EVERY_N_WRITES,
+    FEEDFORWARD_STEP_FLOOR_W,
+    FEEDFORWARD_CONFIRM_RATIO,
+    FEEDFORWARD_CANDIDATE_MAX_AGE_S,
+    FEEDFORWARD_COOLDOWN_S,
+    FEEDFORWARD_PULSE_GUARD_S,
     FAST_ACTUATOR_MAX_LATENCY_S,
     DISCHARGE_ENGAGE_GRACE_S,
     IDLE_RUNAWAY_POWER_W,
@@ -391,6 +396,11 @@ class ChargeDischargeController:
         # alpha is computed per-cycle from real elapsed time (alpha = dt/(tau+dt)).
         self.derivative_tau = 3.0       # seconds; larger = smoother but more lag
         self.derivative_filtered = 0.0  # filtered derivative state
+
+        # Feedforward step detection state (see _check_feedforward_step)
+        self._step_candidate = None              # (baseline_error_w, jump_w, monotonic_ts) awaiting confirmation
+        self._last_feedforward_monotonic = None  # monotonic ts of the last feedforward fire
+        self._last_feedforward_sign = 0          # sign of the last fired jump (+1/-1)
 
         # Control-quality metrics surfaced via the system_pd_control_quality sensor
         # so the user can see the effect of the PD profile/sliders. Time-constant
@@ -3852,6 +3862,74 @@ class ChargeDischargeController:
         base = measured if measured is not None else self.previous_power
         return base - error
 
+    def _check_feedforward_step(self, error):
+        """Two-sample load-step detector for the one-shot feedforward (PD mode).
+
+        A kettle/oven-sized load step takes ~13 s to cover through the incremental
+        P term (Kp=0.35 corrects ~35% per nominal cycle) and raising Kp globally
+        reintroduces hunting. Instead, when this returns True the caller commands
+        ONE deadbeat cycle (measured - error, the no-PD law) and the PD resumes
+        fine adjustment from the new operating point.
+
+        Detection (2 samples, both compared against the pre-step baseline):
+        an error jump beyond max(5*deadband, FEEDFORWARD_STEP_FLOOR_W) arms a
+        candidate; it fires only if the NEXT sample still shows the deviation
+        (same sign, >= FEEDFORWARD_CONFIRM_RATIO of the jump). A single-sample
+        excursion is a meter spike and is rejected. The threshold sits above the
+        adaptive filter's collapse threshold (3*deadband/200W) on purpose: the
+        filter merely passes a step through, the feedforward acts on it.
+
+        Anti-hunting guards:
+        - Cooldown: at most one fire per FEEDFORWARD_COOLDOWN_S, covering the
+          actuator ramp (3-6 s) so the correction transient cannot re-trigger.
+        - Pulse guard: a confirmed step of OPPOSITE sign within
+          FEEDFORWARD_PULSE_GUARD_S of the last fire is a pulsing load
+          (induction hob) — do not fire; the slow PD averaging such loads out
+          is the desired behavior.
+        - A candidate older than FEEDFORWARD_CANDIDATE_MAX_AGE_S (deadband or
+          blocked cycles in between) is stale and cannot confirm.
+        """
+        now = time.monotonic()
+        candidate = self._step_candidate
+        self._step_candidate = None
+        if candidate is not None:
+            baseline, jump, armed_ts = candidate
+            deviation = error - baseline
+            if (
+                now - armed_ts <= FEEDFORWARD_CANDIDATE_MAX_AGE_S
+                and (deviation > 0) == (jump > 0)
+                and abs(deviation) >= FEEDFORWARD_CONFIRM_RATIO * abs(jump)
+            ):
+                sign = 1 if jump > 0 else -1
+                last_ts = self._last_feedforward_monotonic
+                if last_ts is not None and now - last_ts < FEEDFORWARD_COOLDOWN_S:
+                    _LOGGER.debug(
+                        "Feedforward: confirmed %.0fW step suppressed by cooldown (%.1fs < %.0fs)",
+                        jump, now - last_ts, FEEDFORWARD_COOLDOWN_S,
+                    )
+                    return False
+                if (
+                    last_ts is not None
+                    and sign != self._last_feedforward_sign
+                    and now - last_ts < FEEDFORWARD_PULSE_GUARD_S
+                ):
+                    _LOGGER.debug(
+                        "Feedforward: opposite-sign %.0fW step %.1fs after last fire - pulsing load, letting PD average it",
+                        jump, now - last_ts,
+                    )
+                    return False
+                self._last_feedforward_monotonic = now
+                self._last_feedforward_sign = sign
+                return True
+        jump = error - self.previous_error
+        if abs(jump) > max(5 * self.deadband, FEEDFORWARD_STEP_FLOOR_W):
+            self._step_candidate = (self.previous_error, jump, now)
+            _LOGGER.debug(
+                "Feedforward: %.0fW error jump armed as step candidate (awaiting confirmation)",
+                jump,
+            )
+        return False
+
     def _compute_pd_new_power(self, error, sensor_elapsed_s, stale_safety_recalc):
         """Incremental PD control law: anti-windup re-anchor, optional integral,
         filtered derivative, P/I/D terms, rate limiter and directional hysteresis.
@@ -4565,6 +4643,7 @@ class ChargeDischargeController:
         # active_target was calculated before deadband check (reuse it here)
         error = sensor_actual - active_target
 
+        feedforward_fired = False
         if self.no_pd_mode_enabled:
             new_power = self._compute_no_pd_new_power(error)
             if DEBUG_CONTROL_LOOP_DETAIL:
@@ -4572,6 +4651,31 @@ class ChargeDischargeController:
                     "No-PD direct tracking: error=%.1fW, previous=%.1fW, new=%.1fW",
                     error, self.previous_power, new_power,
                 )
+        elif not stale_safety_recalc and self._check_feedforward_step(error):
+            # Confirmed load step: one deadbeat cycle (measured - error), then the
+            # PD resumes fine adjustment. Skips the rate limiter on purpose (a
+            # 400W/s clamp would forfeit the burst response) but keeps the
+            # directional hysteresis. Runs in the same position as the PD law, so
+            # every downstream blocker (time slots, price, EV, capacity) still applies.
+            feedforward_fired = True
+            new_power = self._compute_no_pd_new_power(error)
+            ff_sign = 1 if new_power > 0 else (-1 if new_power < 0 else 0)
+            if (
+                self.last_output_sign != 0
+                and ff_sign != 0
+                and ff_sign != self.last_output_sign
+                and abs(new_power) < self.direction_hysteresis
+                and abs(error) < self.direction_hysteresis
+            ):
+                new_power = 0
+            # Re-anchor derivative state so the next PD cycle doesn't turn the step
+            # into a derivative kick (same pattern as the deadband exit above).
+            self.previous_error = error
+            self.derivative_filtered = 0.0
+            _LOGGER.info(
+                "PD feedforward: confirmed load step, deadbeat command %.1fW (error=%.1fW, measured-anchored)",
+                new_power, error,
+            )
         else:
             new_power = self._compute_pd_new_power(
                 error, sensor_elapsed_s, stale_safety_recalc
@@ -4756,7 +4860,11 @@ class ChargeDischargeController:
         power_allocation = self._power_distribution._distribute_power_by_limits(abs(new_power), selected_batteries, is_charging)
 
         self._log_power_command_plan(
-            phase="track" if self.no_pd_mode_enabled else "pd",
+            phase=(
+                "track" if self.no_pd_mode_enabled
+                else "feedforward" if feedforward_fired
+                else "pd"
+            ),
             grid_w=sensor_actual,
             target_w=active_target,
             previous_power_w=self.previous_power,
