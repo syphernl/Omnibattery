@@ -133,6 +133,7 @@ from .const import (
     NORMAL_BALANCE_RECAL_INVERTER_STANDBY,
     BMS_DISCHARGE_CUTOFF_SOC,
     PD_READBACK_EVERY_N_WRITES,
+    ACK_INEXACT_STREAK_WARN,
     FEEDFORWARD_STEP_FLOOR_W,
     FEEDFORWARD_CONFIRM_RATIO,
     FEEDFORWARD_CANDIDATE_MAX_AGE_S,
@@ -3309,6 +3310,10 @@ class ChargeDischargeController:
                         coordinator, abs(net_power), float(batt_power), attempt=0,
                     )
             if skip_write:
+                # Polled set-points match the commanded values exactly — this is
+                # the deferred settled verification a tolerance-only ACK left
+                # pending (see the readback branch below).
+                coordinator._ack_inexact_streak = 0
                 _LOGGER.debug(
                     "[%s] Power write skipped - already at force=%d charge=%dW "
                     "discharge=%dW",
@@ -3368,6 +3373,25 @@ class ChargeDischargeController:
                 return True
 
             if result.confirmed:
+                # Deferred exact verification: a tolerance-only ACK (exact=False)
+                # means the echo was still ramping when read. Settled state is
+                # proven by an exact echo here or by the poll comparison in the
+                # skip-write block above (both reset the streak). A long streak
+                # of tolerance-only ACKs with neither means the write chain lags
+                # beyond what the settle window ever covers — surface it once.
+                if result.exact:
+                    coordinator._ack_inexact_streak = 0
+                else:
+                    streak = getattr(coordinator, "_ack_inexact_streak", 0) + 1
+                    coordinator._ack_inexact_streak = streak
+                    if streak == ACK_INEXACT_STREAK_WARN:
+                        _LOGGER.warning(
+                            "[%s] %d consecutive power ACKs confirmed only within "
+                            "tolerance — the set-point echo keeps lagging the "
+                            "write. Commands are being delivered, but check the "
+                            "RS485 bridge serial settings (baud, packing/gap time).",
+                            coordinator.name, streak,
+                        )
                 actual_power = result.battery_power_w
                 _LOGGER.debug(
                     "[%s] Power ACK: force=%d charge=%dW discharge=%dW battery=%dW",

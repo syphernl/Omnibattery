@@ -366,6 +366,7 @@ async def test_apply_setpoint_confirms_on_matching_readback():
     res = await drv.apply_setpoint(600, read_back=True)
 
     assert res.ok is True and res.confirmed is True
+    assert res.exact is True
     # delivered power surfaced for non-delivery detection + telemetry echo
     assert res.battery_power_w == 590
     assert res.applied == {
@@ -376,15 +377,54 @@ async def test_apply_setpoint_confirms_on_matching_readback():
 
 async def test_apply_setpoint_unconfirmed_on_mismatched_readback():
     client = _fake_client()
-    client.async_read_register = AsyncMock(side_effect=[1, 500, 0, 480])  # charge != 600
+    # charge echo 300 vs 600 requested: outside the max(100 W, 10%) tolerance
+    client.async_read_register = AsyncMock(side_effect=[1, 300, 0, 280])
     drv = _driver("v3", client=client)
 
     res = await drv.apply_setpoint(600, read_back=True)
 
     assert res.ok is True and res.confirmed is False
     # echo carries the *readback* values, not the commanded ones
-    assert res.applied["set_charge_power"] == 500
-    assert res.battery_power_w == 480
+    assert res.applied["set_charge_power"] == 300
+    assert res.battery_power_w == 280
+
+
+async def test_apply_setpoint_confirms_within_echo_tolerance():
+    client = _fake_client()
+    # charge echo 550 vs 600 requested: within tolerance (battery still ramping /
+    # bridge lagging the write, issue #77) — confirmed, but not exact
+    client.async_read_register = AsyncMock(side_effect=[1, 550, 0, 530])
+    drv = _driver("v3", client=client)
+
+    res = await drv.apply_setpoint(600, read_back=True)
+
+    assert res.ok is True and res.confirmed is True
+    assert res.exact is False
+
+
+async def test_apply_setpoint_force_mode_mismatch_never_confirmed():
+    client = _fake_client()
+    # set-points echo within tolerance but force_mode did not take: no tolerance
+    # for the mode bit — must retry
+    client.async_read_register = AsyncMock(side_effect=[0, 600, 0, 590])
+    drv = _driver("v3", client=client)
+
+    res = await drv.apply_setpoint(600, read_back=True)
+
+    assert res.ok is True and res.confirmed is False
+
+
+async def test_apply_setpoint_idle_confirms_with_residual_echo():
+    client = _fake_client()
+    # idle command: force echoed 0, charge register still draining (80 W residual
+    # within the 100 W floor) — confirmed, not exact
+    client.async_read_register = AsyncMock(side_effect=[0, 80, 0, 10])
+    drv = _driver("v3", client=client)
+
+    res = await drv.apply_setpoint(0, read_back=True)
+
+    assert res.ok is True and res.confirmed is True
+    assert res.exact is False
 
 
 async def test_apply_setpoint_feedback_timeout_when_readback_fails():

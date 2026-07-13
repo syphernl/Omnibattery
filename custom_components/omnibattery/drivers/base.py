@@ -124,6 +124,12 @@ class SetpointResult:
     # Brief machine-readable reason when ``ok`` is False (e.g. "write_failed",
     # "not_connected", "feedback_timeout"). None on success.
     failure_reason: Optional[str] = None
+    # True when a confirmed readback echoed the written set-points exactly;
+    # False when confirmation relied on the driver's echo tolerance (the battery
+    # is still ramping / the bridge lagged the write). Only meaningful when
+    # ``confirmed`` is True — the control layer uses it to defer the exact
+    # settled-state verification to the poll comparison.
+    exact: bool = True
     # Measured delivered power (signed W, +charge / -discharge) read back from the
     # hardware on a confirmation cycle; None on the write-only fast path
     # (``read_back=False``). Universal telemetry the control layer uses for

@@ -222,6 +222,15 @@ BMS_DISCHARGE_CUTOFF_SOC = 20                  # %: below this, refused discharg
 # delivering are caught up to N writes later instead of immediately.
 PD_READBACK_EVERY_N_WRITES = 5
 
+# Deferred exact-ACK verification: a readback may confirm within the driver's
+# echo tolerance while the battery is still ramping toward the set-point (see
+# _ACK_TOLERANCE_* in drivers/marstek.py). The exact settled check happens
+# later — an exact readback echo or the poll-time skip-write comparison. If
+# this many consecutive readback cycles confirm only by tolerance without an
+# exact match in between, warn once: the write chain (RS485-ETH bridge serial
+# config, firmware) lags more than the settle window ever covers.
+ACK_INEXACT_STREAK_WARN = 5
+
 # Transient burst poll: right after a REAL power command change, the delivered-
 # power reading (ac_power / battery_power) is polled at this cadence instead of
 # its normal "high" scan interval, so _measured_battery_power() isn't stale

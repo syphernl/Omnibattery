@@ -48,6 +48,16 @@ _FORCE_DISCHARGE = 2
 _RS485_ENABLE = 21930   # 0x55AA
 _RS485_DISABLE = 21947  # 0x55BB
 
+# Set-point echo tolerance for the post-write readback. The battery applies
+# writes asynchronously and an RS485-ETH bridge adds latency, so the readback
+# 0.2 s after the write can still catch the previous/ramping value. Exact
+# equality here produced false ack_mismatch failures (and 5-min pool
+# exclusions) on batteries that were delivering the requested power — issue
+# #77. Mirrors the non-responsive tracker's 10% delivery tolerance, with a
+# floor for small set-points. force_mode is always compared exactly.
+_ACK_TOLERANCE_PCT = 0.10
+_ACK_TOLERANCE_FLOOR_W = 100
+
 
 def _load_definitions(version: str) -> dict[str, list[dict]]:
     """Return this Marstek version's per-platform entity definitions.
@@ -487,7 +497,15 @@ class MarstekModbusDriver(BatteryDriver):
                 ok=True, net_power_w=applied_net, confirmed=False, failure_reason="feedback_timeout",
             )
 
-        confirmed = force_fb == force_mode and charge_fb == charge and discharge_fb == discharge
+        tolerance = max(
+            _ACK_TOLERANCE_FLOOR_W, int(_ACK_TOLERANCE_PCT * max(charge, discharge))
+        )
+        exact = force_fb == force_mode and charge_fb == charge and discharge_fb == discharge
+        confirmed = (
+            force_fb == force_mode
+            and abs(charge_fb - charge) <= tolerance
+            and abs(discharge_fb - discharge) <= tolerance
+        )
         applied = {
             "force_mode": force_fb,
             "set_charge_power": charge_fb,
@@ -495,7 +513,7 @@ class MarstekModbusDriver(BatteryDriver):
             "battery_power": power_fb,
         }
         return SetpointResult(
-            ok=True, net_power_w=applied_net, confirmed=confirmed,
+            ok=True, net_power_w=applied_net, confirmed=confirmed, exact=exact,
             battery_power_w=power_fb, applied=applied,
         )
 
