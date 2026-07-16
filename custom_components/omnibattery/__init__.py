@@ -160,7 +160,7 @@ from .control.weekly_full_charge import WeeklyFullChargeManager
 from .control.active_balance_mode import ActiveBalanceModeManager
 from .control.max_soc_charge import MaxSocChargeManager
 from .control.temperature_limit import TemperatureChargeLimitManager
-from .pricing import DynamicPricingSchedule, notifications
+from .pricing import DynamicPricingSchedule, calculations, notifications
 from .pricing.engine import PricingManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -2512,6 +2512,14 @@ class ChargeDischargeController:
                 "days_in_history": 0,
                 "reason": f"Invalid battery capacity: {total_capacity_kwh:.2f} kWh"
             }
+        battery_headroom_kwh = sum(
+            max(
+                0.0,
+                (c.max_soc - (c.data.get("battery_soc", c.max_soc) or 0)) / 100.0
+                * (c.data.get("battery_total_energy", 0) or 0),
+            )
+            for c in coordinators_with_data
+        )
         avg_soc = sum(c.data.get("battery_soc", 0) for c in coordinators_with_data) / len(coordinators_with_data)
 
         # Get min_soc from coordinators (use max if mixed configs for safety)
@@ -2556,6 +2564,11 @@ class ChargeDischargeController:
             total_available_kwh = usable_energy_kwh
             energy_deficit_kwh = max(avg_consumption_kwh + safety_margin_kwh - total_available_kwh, floor_deficit_kwh)
             should_charge = energy_deficit_kwh > 0
+            planned_grid_charge_kwh = calculations.calculate_planned_grid_charge_kwh(
+                energy_deficit_kwh,
+                battery_headroom_kwh,
+                self._predictive_grid_charge_margin_pct,
+            )
 
             _LOGGER.warning(
                 "Solar forecast unavailable - using conservative mode:\n"
@@ -2580,6 +2593,7 @@ class ChargeDischargeController:
                 "avg_consumption_kwh": avg_consumption_kwh,
                 "total_available_kwh": total_available_kwh,
                 "energy_deficit_kwh": energy_deficit_kwh,
+                "planned_grid_charge_kwh": planned_grid_charge_kwh,
                 "days_in_history": days_in_history,
                 "reason": f"Solar unavailable - conservative mode ({'charge' if should_charge else 'safe'})"
             }
@@ -2591,6 +2605,11 @@ class ChargeDischargeController:
             total_available_kwh = usable_energy_kwh
             energy_deficit_kwh = max(avg_consumption_kwh + safety_margin_kwh - total_available_kwh, floor_deficit_kwh)
             should_charge = energy_deficit_kwh > 0
+            planned_grid_charge_kwh = calculations.calculate_planned_grid_charge_kwh(
+                energy_deficit_kwh,
+                battery_headroom_kwh,
+                self._predictive_grid_charge_margin_pct,
+            )
 
             _LOGGER.error(
                 "Invalid solar forecast value '%s' - using conservative mode:\n"
@@ -2615,6 +2634,7 @@ class ChargeDischargeController:
                 "avg_consumption_kwh": avg_consumption_kwh,
                 "total_available_kwh": total_available_kwh,
                 "energy_deficit_kwh": energy_deficit_kwh,
+                "planned_grid_charge_kwh": planned_grid_charge_kwh,
                 "days_in_history": days_in_history,
                 "reason": "Invalid solar forecast - conservative mode"
             }
@@ -2654,9 +2674,7 @@ class ChargeDischargeController:
 
         # === STEP 7: Return Complete Decision Data ===
         # Grid-only charge split: how much comes from grid vs solar
-        _max_soc_values = [c.max_soc for c in coordinators_with_data]
-        _config_max_soc = min(_max_soc_values) if _max_soc_values else 95
-        _gap_to_max_kwh = max(0.0, (_config_max_soc - avg_soc) / 100.0 * total_capacity_kwh)
+        _gap_to_max_kwh = battery_headroom_kwh
         # Cap at battery headroom: only this much solar can actually land in the
         # battery, so the "solar will charge the remaining X" line can't quote a
         # figure larger than the pack (e.g. 12.94 kWh into a 5.12 kWh battery).
@@ -2665,6 +2683,11 @@ class ChargeDischargeController:
         grid_charge_kwh = min(
             _gap_to_max_kwh,
             max(0.0, _gap_to_max_kwh - solar_surplus_kwh) * _grid_margin_factor,
+        )
+        planned_grid_charge_kwh = calculations.calculate_planned_grid_charge_kwh(
+            energy_deficit_kwh,
+            _gap_to_max_kwh,
+            self._predictive_grid_charge_margin_pct,
         )
 
         return {
@@ -2679,6 +2702,7 @@ class ChargeDischargeController:
             "avg_consumption_kwh": avg_consumption_kwh,
             "total_available_kwh": total_available_kwh,
             "energy_deficit_kwh": energy_deficit_kwh,
+            "planned_grid_charge_kwh": planned_grid_charge_kwh,
             "days_in_history": days_in_history,
             "solar_surplus_kwh": solar_surplus_kwh,
             "grid_charge_kwh": grid_charge_kwh,
@@ -2799,9 +2823,17 @@ class ChargeDischargeController:
         # there was no solar surplus (consumption ≥ solar: winter/cloudy/
         # overnight), so charging filled the battery for the whole slot instead
         # of stopping at the deficit. The deficit already nets out solar and the
-        # additive safety margin, so no further solar/margin term is applied. #409
+        # additive safety margin; the optional grid-charge percentage margin is
+        # applied by the shared planning calculation before the headroom cap. #409
         energy_deficit_kwh = max(0.0, decision_data.get("energy_deficit_kwh", 0.0))
-        grid_charge_kwh = min(total_gap_kwh, energy_deficit_kwh)
+        planned_grid_charge_kwh = decision_data.get("planned_grid_charge_kwh")
+        if planned_grid_charge_kwh is None:
+            planned_grid_charge_kwh = calculations.calculate_planned_grid_charge_kwh(
+                energy_deficit_kwh,
+                total_gap_kwh,
+                self._predictive_grid_charge_margin_pct,
+            )
+        grid_charge_kwh = min(total_gap_kwh, max(0.0, planned_grid_charge_kwh))
 
         targets: dict = {}
         for c in coordinators_with_data:
