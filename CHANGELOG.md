@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] - 2026-07-14
+
+### Fixed
+- **Charge stuck at the top voltage with the SOC below 100%** (voltage taper): an idle battery reads the same ≤10 W + Standby as a real BMS cutoff, which falsely latched the top-of-charge pause; the cutoff now only counts when we actually commanded the charge.
+
 ## [1.0.0] - 2026-07-13
 
 > ### ⚠️ Major change — new repository, integration renamed to “Omnibattery”

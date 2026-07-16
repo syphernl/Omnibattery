@@ -121,6 +121,31 @@ class MaxSocChargeManager:
             return False
         return False
 
+    @staticmethod
+    def _bms_cut_signature(coordinator, data: dict) -> bool:
+        """Return True when the BMS refuses a charge we are actually commanding.
+
+        ≤10 W + Standby on its own is ambiguous: a battery that is merely idle —
+        not allocated charge this cycle (solar lull, PD prioritising another
+        battery, any other blocker) — reads exactly the same without being full.
+        Gating on the commanded set-point is what separates a real BMS cut from
+        "nobody asked it to charge". Same gate as the weekly twin
+        (weekly_full_charge.tick_bms_cutoff).
+        """
+        power = data.get("battery_power")
+        inv = data.get("inverter_state")
+        commanded = getattr(coordinator, "commanded_charge_power", 0) or 0
+        try:
+            return (
+                power is not None
+                and inv is not None
+                and commanded > NORMAL_BALANCE_RECAL_CUTOFF_POWER_W
+                and float(power) <= NORMAL_BALANCE_RECAL_CUTOFF_POWER_W
+                and int(inv) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
+            )
+        except (TypeError, ValueError):
+            return False
+
     def _compute_recal_override(self, coordinator, vmax_f: float, soc) -> bool:
         """Decide whether to keep charging past the tapper pause to recalibrate SOC.
 
@@ -140,19 +165,7 @@ class MaxSocChargeManager:
             return False
 
         data = coordinator.data or {}
-        power = data.get("battery_power")
-        inv = data.get("inverter_state")
-        try:
-            cutoff = (
-                power is not None
-                and inv is not None
-                and float(power) <= NORMAL_BALANCE_RECAL_CUTOFF_POWER_W
-                and int(inv) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
-            )
-        except (TypeError, ValueError):
-            cutoff = False
-
-        if cutoff:
+        if self._bms_cut_signature(coordinator, data):
             count = c._normal_balance_recal_cutoff_count.get(coordinator, 0) + 1
             c._normal_balance_recal_cutoff_count[coordinator] = count
             if count >= NORMAL_BALANCE_RECAL_CUTOFF_CYCLES:
@@ -165,7 +178,21 @@ class MaxSocChargeManager:
                 )
                 return False
         else:
-            c._normal_balance_recal_cutoff_count.pop(coordinator, None)
+            power = data.get("battery_power")
+            try:
+                accepting = (
+                    power is not None
+                    and float(power) > NORMAL_BALANCE_RECAL_CUTOFF_POWER_W
+                )
+            except (TypeError, ValueError):
+                accepting = False
+            if accepting:
+                # Battery is taking charge → genuinely not full. Reset.
+                c._normal_balance_recal_cutoff_count.pop(coordinator, None)
+            # else: idle / not commanded to charge this cycle — freeze the counter
+            # (neither increment nor reset). A confirmed cutoff stops the battery
+            # from being commanded, which would otherwise reset the very counter
+            # that is about to latch it.
         return True
 
     def _clear_recal_state(self, coordinator) -> None:
@@ -238,24 +265,16 @@ class MaxSocChargeManager:
                 # stops charging and stays stopped — it must NOT re-trickle when
                 # the cell relaxes, which would pin the cell at the top voltage.
                 #
-                # Also latch on the BMS-cutoff signature (charge collapsed to ~0 W
-                # with the inverter in standby while still in the top zone). The
-                # cell relaxes below the pause voltage within a poll or two of the
-                # cut, so a 2 s poll may never observe vmax >= pause and the latch
-                # would otherwise never arm — the controller keeps re-commanding
-                # charge and the BMS cuts again, an endless top-of-charge ping-pong.
-                power = data.get("battery_power")
-                inv = data.get("inverter_state")
-                try:
-                    bms_cut_signature = (
-                        in_zone
-                        and power is not None
-                        and inv is not None
-                        and float(power) <= NORMAL_BALANCE_RECAL_CUTOFF_POWER_W
-                        and int(inv) == NORMAL_BALANCE_RECAL_INVERTER_STANDBY
-                    )
-                except (TypeError, ValueError):
-                    bms_cut_signature = False
+                # Also latch on the BMS-cutoff signature (a charge we commanded
+                # collapsed to ~0 W with the inverter in standby while still in the
+                # top zone). The cell relaxes below the pause voltage within a poll
+                # or two of the cut, so a 2 s poll may never observe vmax >= pause
+                # and the latch would otherwise never arm — the controller keeps
+                # re-commanding charge and the BMS cuts again, an endless
+                # top-of-charge ping-pong.
+                bms_cut_signature = in_zone and self._bms_cut_signature(
+                    coordinator, data
+                )
                 if not weekly_active and in_zone and (
                     vmax_f >= NORMAL_BALANCE_PAUSE_CELL_VOLTAGE or bms_cut_signature
                 ):
