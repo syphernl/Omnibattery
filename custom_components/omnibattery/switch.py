@@ -229,6 +229,26 @@ class MarstekVenusSwitch(CoordinatorEntity, SwitchEntity):
         """Turn the switch off."""
         if self.definition["key"] == "rs485_control_mode":
             self.coordinator.set_rs485_user_disabled(True)
+
+            success = await self.coordinator.set_rs485_control(False)
+            if not success:
+                raise HomeAssistantError(
+                    f"Unable to disable RS485 control for {self.coordinator.name}"
+                )
+
+            # Keep the preference even when confirmation fails: it prevents a
+            # concurrent or later reconnect from re-enabling external control
+            # against the user's request. Surface the failed verification to HA
+            # rather than leaving the entity optimistically OFF.
+            if await self.coordinator.rs485_control_enabled() is not False:
+                raise HomeAssistantError(
+                    f"RS485 control could not be verified as disabled for "
+                    f"{self.coordinator.name}"
+                )
+
+            await self.coordinator.async_request_refresh()
+            return
+
         await self.coordinator.write_control(self.definition["key"], self._command_off, do_refresh=True)
 
     @property

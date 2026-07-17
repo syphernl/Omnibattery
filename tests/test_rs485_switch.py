@@ -71,3 +71,27 @@ async def test_rs485_turn_on_fails_when_reconnect_fails():
         await switch.async_turn_on()
 
     coordinator.rs485_control_enabled.assert_not_awaited()
+
+
+async def test_rs485_turn_off_writes_semantic_command_and_verifies_register():
+    switch, coordinator = _switch(mode=0x55AA)
+    coordinator.rs485_control_enabled.return_value = False
+
+    await switch.async_turn_off()
+
+    coordinator.set_rs485_user_disabled.assert_called_once_with(True)
+    coordinator.set_rs485_control.assert_awaited_once_with(False)
+    coordinator.rs485_control_enabled.assert_awaited_once()
+    coordinator.async_request_refresh.assert_awaited_once()
+    coordinator.write_control.assert_not_awaited()
+
+
+async def test_rs485_turn_off_fails_when_readback_is_not_disabled():
+    switch, coordinator = _switch(mode=0x55AA)
+
+    with pytest.raises(HomeAssistantError, match="verified as disabled"):
+        await switch.async_turn_off()
+
+    coordinator.set_rs485_user_disabled.assert_called_once_with(True)
+    coordinator.set_rs485_control.assert_awaited_once_with(False)
+    coordinator.async_request_refresh.assert_not_awaited()
