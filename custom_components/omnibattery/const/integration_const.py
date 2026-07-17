@@ -41,8 +41,9 @@ SERIAL_BAUDRATE = 115200
 
 # Experimental per-battery compatibility for queued Modbus TCP-to-RTU
 # gateways. Disabled by default: ordinary v2 connections keep pymodbus's
-# internal same-transaction-id retries. When enabled on v2/TCP, each transaction
-# is sent only once while preserving the standard total response window.
+# internal same-transaction-id retries. When enabled on v2/TCP, it restores the
+# legacy MVEM route: one send per transaction ID and up to three wrapper attempts
+# with a new transaction ID after a failed response.
 CONF_QUEUED_GATEWAY_COMPATIBILITY = "queued_gateway_compatibility"
 
 # Maximum power (W) per battery version — used by config_flow to set slider limits

@@ -2,12 +2,11 @@
 
 Exercises ``_read_raw`` and ``async_write_register`` against a scripted fake
 pymodbus client (no hardware, no HA). These pin three deliberate properties:
-the default is a SINGLE wrapper attempt (standard retries are
-pymodbus-internal and reuse the same transaction_id; the queued-gateway opt-in
-sends once), the same-connection retry loop still works for callers that opt
-in, and a connection error does NOT trigger a reconnect from inside the loop
-(the coordinator owns reconnection; reconnecting here would storm the v3
-single TCP slot, issue #361).
+the standard profile uses a single wrapper attempt with pymodbus-internal
+same-transaction-ID retries; the queued-gateway opt-in restores MVEM's three
+wrapper attempts with one wire send per transaction ID; and failures do not
+reconnect from inside the loop (the coordinator owns reconnection; reconnecting
+here would storm the v3 single TCP slot, issue #361).
 
 ``retry_delay=0`` keeps the backoff sleeps at zero so the tests run instantly.
 """
@@ -91,6 +90,17 @@ def test_read_default_is_single_attempt():
     regs = asyncio.run(c._read_raw(0x0010, 1, retry_delay=0))
     assert regs is None
     assert fake.read_calls == 1
+
+
+def test_queued_gateway_default_retries_short_read_via_mvem_wrapper():
+    """The opt-in retries incomplete data as a fresh wrapper transaction."""
+    fake = _FakeClient(
+        read_results=[_Result([1]), _Result([1]), _Result([1, 2])]
+    )
+    c = _client_with_fake(fake, queued_gateway_compatibility=True)
+    regs = asyncio.run(c._read_raw(0x0010, 2, retry_delay=0))
+    assert regs == [1, 2]
+    assert fake.read_calls == 3
 
 
 def test_read_retries_on_connection_error_then_succeeds():
@@ -180,6 +190,16 @@ def test_write_default_is_single_attempt():
     c = _client_with_fake(fake)
     assert asyncio.run(c.async_write_register(0x2000, 1, retry_delay=0)) is False
     assert fake.write_calls == 1
+
+
+def test_queued_gateway_default_retries_write_via_mvem_wrapper():
+    """The opt-in retries a communication failure with a new transaction."""
+    fake = _FakeClient(
+        write_results=[asyncio.TimeoutError(), _Result(error=False)]
+    )
+    c = _client_with_fake(fake, queued_gateway_compatibility=True)
+    assert asyncio.run(c.async_write_register(0x2000, 1, retry_delay=0)) is True
+    assert fake.write_calls == 2
 
 
 def test_write_retries_on_connection_error_then_succeeds():

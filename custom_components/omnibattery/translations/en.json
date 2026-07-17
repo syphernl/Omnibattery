@@ -50,7 +50,7 @@
           "slave_id": "Modbus Slave ID",
           "battery_version": "Battery Model",
           "serial_port": "Serial port (Modbus RTU)",
-          "queued_gateway_compatibility": "Queued Modbus gateway compatibility (experimental)"
+          "queued_gateway_compatibility": "Legacy MVEM Modbus compatibility (experimental)"
         },
         "data_description": {
           "name": "Descriptive name to identify this battery",
@@ -59,7 +59,7 @@
           "slave_id": "Modbus slave/unit id (default 1). Change only when a Modbus proxy maps several batteries to one IP:port using distinct slave ids.",
           "battery_version": "Select your battery model version. Ev2 for older models, Ev3 for newer models with updated register map, A (Venus A) or D (Venus D) for hybrid inverter models",
           "serial_port": "USB-RS485 adapter path, e.g. /dev/ttyUSB0 or COM3. Fill this instead of the IP address to use Modbus RTU over serial; leave empty for TCP.",
-          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Sends each transaction once to test gateways that may queue retries as separate RTU requests. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
+          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Restores MVEM's retry path: one send per transaction ID and up to three attempts with a fresh ID after a failed, timed-out or incomplete response. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
         }
       },
       "battery_connection_zendure": {
@@ -453,7 +453,7 @@
           "slave_id": "Modbus Slave ID",
           "battery_version": "Battery Model",
           "serial_port": "Serial port (Modbus RTU)",
-          "queued_gateway_compatibility": "Queued Modbus gateway compatibility (experimental)"
+          "queued_gateway_compatibility": "Legacy MVEM Modbus compatibility (experimental)"
         },
         "data_description": {
           "name": "Descriptive name to identify this battery",
@@ -462,7 +462,7 @@
           "slave_id": "Modbus slave/unit id (default 1). Change only when a Modbus proxy maps several batteries to one IP:port using distinct slave ids.",
           "battery_version": "Select your battery model version",
           "serial_port": "USB-RS485 adapter path, e.g. /dev/ttyUSB0 or COM3. Fill this instead of the IP address to use Modbus RTU over serial; leave empty for TCP.",
-          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Sends each transaction once to test gateways that may queue retries as separate RTU requests. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
+          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Restores MVEM's retry path: one send per transaction ID and up to three attempts with a fresh ID after a failed, timed-out or incomplete response. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
         }
       },
       "reconfigure_battery_zendure": {
@@ -586,7 +586,7 @@
           "slave_id": "Modbus Slave ID",
           "battery_version": "Battery Model",
           "serial_port": "Serial port (Modbus RTU)",
-          "queued_gateway_compatibility": "Queued Modbus gateway compatibility (experimental)"
+          "queued_gateway_compatibility": "Legacy MVEM Modbus compatibility (experimental)"
         },
         "data_description": {
           "name": "Descriptive name to identify this battery",
@@ -595,7 +595,7 @@
           "slave_id": "Modbus slave/unit id (default 1). Change only when a Modbus proxy maps several batteries to one IP:port using distinct slave ids.",
           "battery_version": "Select your battery model version. Ev2 for older models, Ev3 for newer models with updated register map, A (Venus A) or D (Venus D) for hybrid inverter models",
           "serial_port": "USB-RS485 adapter path, e.g. /dev/ttyUSB0 or COM3. Fill this instead of the IP address to use Modbus RTU over serial; leave empty for TCP.",
-          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Sends each transaction once to test gateways that may queue retries as separate RTU requests. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
+          "queued_gateway_compatibility": "For Venus v2 over Modbus TCP only. Restores MVEM's retry path: one send per transaction ID and up to three attempts with a fresh ID after a failed, timed-out or incomplete response. Leave disabled for direct connections, Elfin EW11, serial RTU and normal gateways."
         }
       },
       "battery_connection_zendure": {

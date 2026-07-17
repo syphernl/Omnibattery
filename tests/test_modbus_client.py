@@ -205,13 +205,14 @@ def test_v2_tcp_keeps_standard_retries_by_default():
     assert c._queued_gateway_compatibility is False
     assert c._pymodbus_retries == 2
     assert c.client.ctx.retries == 2
+    assert c._wrapper_attempts == 1
     assert c._pymodbus_timeout == c._timeout
     assert c.client.ctx.comm_params.timeout_connect == c._timeout
     assert c._request_timeout == c._timeout * 3 + 2
 
 
-def test_v2_queued_gateway_mode_sends_once_with_full_response_window():
-    """The experimental opt-in changes only the selected v2/TCP client."""
+def test_v2_queued_gateway_mode_restores_mvem_retry_profile():
+    """The opt-in sends once per TID and retries through the wrapper."""
     c = _make_client(
         host="192.168.1.50",
         port=502,
@@ -221,9 +222,10 @@ def test_v2_queued_gateway_mode_sends_once_with_full_response_window():
     assert c._queued_gateway_compatibility is True
     assert c._pymodbus_retries == 0
     assert c.client.ctx.retries == 0
-    assert c._pymodbus_timeout == c._timeout * 3
-    assert c.client.ctx.comm_params.timeout_connect == c._timeout * 3
-    assert c._request_timeout == c._timeout * 3 + 2
+    assert c._wrapper_attempts == 3
+    assert c._pymodbus_timeout == c._timeout
+    assert c.client.ctx.comm_params.timeout_connect == c._timeout
+    assert c._request_timeout == c._timeout + 2
 
 
 def test_v3_tcp_keeps_internal_same_tid_retries():
@@ -231,6 +233,7 @@ def test_v3_tcp_keeps_internal_same_tid_retries():
     c = _make_client(host="192.168.1.50", port=502, is_v3=True)
     assert c._pymodbus_retries == 2
     assert c.client.ctx.retries == 2
+    assert c._wrapper_attempts == 1
     assert c._pymodbus_timeout == c._timeout
     assert c.client.ctx.comm_params.timeout_connect == c._timeout
     assert c._request_timeout == c._timeout * 3 + 2
@@ -240,7 +243,7 @@ def test_v3_tcp_keeps_internal_same_tid_retries():
     "is_v3, compatibility, expected_retries, expected_timeout",
     [
         (False, False, 2, 10),
-        (False, True, 0, 30),
+        (False, True, 0, 10),
         (True, True, 2, 10),
     ],
 )
@@ -312,6 +315,7 @@ def test_serial_ignores_queued_tcp_gateway_mode():
     assert c._queued_gateway_compatibility is False
     assert c._pymodbus_retries == 2
     assert c.client.ctx.retries == 2
+    assert c._wrapper_attempts == 1
 
 
 def test_serial_skips_v3_packet_correction():

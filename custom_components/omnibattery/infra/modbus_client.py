@@ -20,7 +20,8 @@ _LOGGER = logging.getLogger(__name__)
 # Standard policy for every model. Since pymodbus 3.8, internal retries reuse
 # the same transaction_id, so late replies still match the outstanding request.
 _PYMODBUS_RETRIES = 2
-_RESPONSE_WINDOW_ATTEMPTS = _PYMODBUS_RETRIES + 1
+_STANDARD_WRAPPER_ATTEMPTS = 1
+_MVEM_WRAPPER_ATTEMPTS = 3
 
 
 def _backoff_jitter(delay: float) -> float:
@@ -144,8 +145,10 @@ class MarstekModbusClient:
                 TCP and ``host``/``port`` are ignored for the link (discussion
                 #350). None = Modbus TCP (default, unchanged behaviour).
             queued_gateway_compatibility (bool): Experimental v2/TCP mode that
-                sends each transaction only once. Intended for gateways that
-                queue pymodbus's same-ID resends as independent RTU requests.
+                restores MVEM's legacy retry path: each transaction is sent once
+                and a failed attempt is retried as a new transaction. Intended
+                for gateways that queue same-ID resends as independent RTU
+                requests.
         """
         self.host = host
         self.port = port
@@ -170,14 +173,17 @@ class MarstekModbusClient:
         self._pymodbus_retries = (
             0 if self._queued_gateway_compatibility else _PYMODBUS_RETRIES
         )
-        # The opt-in sends once but keeps the standard policy's total response
-        # window open. A slow reply therefore completes the pending request
-        # instead of arriving later as an orphan PDU.
-        self._pymodbus_timeout = (
-            timeout * _RESPONSE_WINDOW_ATTEMPTS
+        # MVEM used three wrapper attempts. Preserve that proven gateway path
+        # deliberately: pymodbus sends once per transaction, while a timeout,
+        # short read or other communication failure starts a new transaction ID.
+        # Standard clients keep one wrapper attempt because their retries live
+        # inside pymodbus and reuse the same transaction ID.
+        self._wrapper_attempts = (
+            _MVEM_WRAPPER_ATTEMPTS
             if self._queued_gateway_compatibility
-            else timeout
+            else _STANDARD_WRAPPER_ATTEMPTS
         )
+        self._pymodbus_timeout = timeout
         # Outer safety-net timeout for one request: must cover all pymodbus
         # internal attempts ((retries+1) x per-attempt timeout) plus margin.
         # Cancelling pymodbus mid-transaction orphans an already-sent request,
@@ -210,8 +216,9 @@ class MarstekModbusClient:
         fresh client instances, which avoids pymodbus's internal reconnect_delay
         growing up to 300s. Standard clients retry inside pymodbus (same
         transaction_id since 3.8), so a late reply is consumed by the
-        outstanding request. The experimental queued-gateway mode sends a v2
-        TCP request only once while keeping the same total response window.
+        outstanding request. The experimental queued-gateway mode restores the
+        MVEM path: one wire send per transaction and up to three wrapper attempts,
+        each with a new transaction ID.
 
         Serial uses RTU framing at a fixed 115200 8N1 — the rate Marstek's RS485
         link runs at (discussion #350); these are hardware-fixed, not tunable.
@@ -337,7 +344,7 @@ class MarstekModbusClient:
         self,
         register: int,
         count: int,
-        max_retries: int = 1,
+        max_retries: Optional[int] = None,
         retry_delay: float = 0.1,
         sensor_key: Optional[str] = None,
     ) -> Optional[list]:
@@ -347,11 +354,10 @@ class MarstekModbusClient:
         Returns the list of register words (length ``count``) or None on
         failure. Callers decode the words with :func:`decode_registers`.
 
-        Default is a single wrapper attempt. Retries are pymodbus-internal (same
-        transaction_id per re-send), so late replies match and are consumed.
-        The queued-gateway opt-in disables those internal resends. Looping here
-        would mint a new tid per attempt and turn every late reply into a
-        discarded "transaction_id mismatch".
+        Standard clients use one wrapper attempt and retry inside pymodbus with
+        the same transaction ID. The queued-gateway opt-in instead restores
+        MVEM's three wrapper attempts with pymodbus retries disabled, so every
+        failed attempt is retried as a new transaction ID.
         """
         if not (0 <= register <= 0xFFFF):
             _LOGGER.error(
@@ -368,10 +374,11 @@ class MarstekModbusClient:
             )
             return None
 
+        attempt_limit = self._wrapper_attempts if max_retries is None else max_retries
         attempt = 0
         current_retry_delay = retry_delay
 
-        while attempt < max_retries:
+        while attempt < attempt_limit:
             # Skip connection check - let pymodbus handle connection issues
             # This avoids problems with incorrect connection state reporting
 
@@ -437,7 +444,7 @@ class MarstekModbusClient:
                 return None
 
             attempt += 1
-            if attempt < max_retries:
+            if attempt < attempt_limit:
                 # Exponential backoff with jitter
                 await asyncio.sleep(current_retry_delay + _backoff_jitter(current_retry_delay))
                 current_retry_delay = min(current_retry_delay * 2, 5.0)  # Cap at 5 seconds
@@ -446,7 +453,7 @@ class MarstekModbusClient:
             "Failed to read register %d (0x%04X) after %d attempts",
             register,
             register,
-            max_retries,
+            attempt_limit,
         )
         return None
 
@@ -457,7 +464,7 @@ class MarstekModbusClient:
         count: Optional[int] = None,
         bit_index: Optional[int] = None,
         sensor_key: Optional[str] = None,
-        max_retries: int = 1,
+        max_retries: Optional[int] = None,
         retry_delay: float = 0.1,
     ):
         """
@@ -493,7 +500,7 @@ class MarstekModbusClient:
         self,
         start: int,
         count: int,
-        max_retries: int = 1,
+        max_retries: Optional[int] = None,
         retry_delay: float = 0.1,
         block_key: Optional[str] = None,
     ) -> Optional[list]:
@@ -512,13 +519,14 @@ class MarstekModbusClient:
             sensor_key=block_key,
         )
 
-    async def async_write_register(self, register: int, value: int, max_retries: int = 1, retry_delay: float = 0.1) -> bool:
+    async def async_write_register(self, register: int, value: int, max_retries: Optional[int] = None, retry_delay: float = 0.1) -> bool:
         """
         Write a single value to a Modbus holding register asynchronously.
 
-        Default is a single attempt; retries are pymodbus-internal with the
-        same transaction_id (see ``_read_raw``). Re-sending a single-register
-        write is idempotent, so a duplicate delivery is harmless.
+        Standard clients use one wrapper attempt and retry inside pymodbus. The
+        queued-gateway opt-in restores MVEM's three wrapper attempts with a new
+        transaction ID per attempt (see ``_read_raw``). Re-sending a
+        single-register write is idempotent.
 
         Args:
             register (int): Register address to write to.
@@ -527,10 +535,11 @@ class MarstekModbusClient:
         Returns:
             bool: True if write was successful, False otherwise.
         """
+        attempt_limit = self._wrapper_attempts if max_retries is None else max_retries
         attempt = 0
         current_retry_delay = retry_delay
         
-        while attempt < max_retries:
+        while attempt < attempt_limit:
             # Skip connection check for write operations too
             # Let pymodbus handle connection issues
 
@@ -566,7 +575,7 @@ class MarstekModbusClient:
                 return False
 
             attempt += 1
-            if attempt < max_retries:
+            if attempt < attempt_limit:
                 # Exponential backoff with jitter
                 await asyncio.sleep(current_retry_delay + _backoff_jitter(current_retry_delay))
                 current_retry_delay = min(current_retry_delay * 2, 5.0)  # Cap at 5 seconds
@@ -575,6 +584,6 @@ class MarstekModbusClient:
             "Failed to write register %d (0x%04X) after %d attempts",
             register,
             register,
-            max_retries,
+            attempt_limit,
         )
         return False
