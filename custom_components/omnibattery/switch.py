@@ -7,6 +7,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -189,13 +190,65 @@ class MarstekVenusSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the switch on."""
         if self.definition["key"] == "rs485_control_mode":
+            was_off = self.is_on is False
             self.coordinator.set_rs485_user_disabled(False)
+
+            if was_off:
+                # Venus v3 can acknowledge 0x55AA on an existing TCP session yet
+                # retain 0x55BB until that session is replaced (issue #92). A
+                # reconnect is therefore part of the OFF -> ON transition, not a
+                # recovery reserved for the automatic control path.
+                _LOGGER.info(
+                    "%s: RS485 control enabled by user; reconnecting with a fresh connection",
+                    self.coordinator.name,
+                )
+                success = await self.coordinator.async_reconnect_fresh()
+            else:
+                success = await self.coordinator.set_rs485_control(True)
+
+            if not success:
+                raise HomeAssistantError(
+                    f"Unable to enable RS485 control for {self.coordinator.name}"
+                )
+
+            # Do not optimistically report ON: the BMS may ACK the write while
+            # leaving the control register disabled. This readback is deliberately
+            # after the fresh connection, which is the sequence that makes v3
+            # firmware apply the command reliably.
+            if await self.coordinator.rs485_control_enabled() is not True:
+                raise HomeAssistantError(
+                    f"RS485 control could not be verified for {self.coordinator.name}"
+                )
+
+            await self.coordinator.async_request_refresh()
+            return
+
         await self.coordinator.write_control(self.definition["key"], self._command_on, do_refresh=True)
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn the switch off."""
         if self.definition["key"] == "rs485_control_mode":
             self.coordinator.set_rs485_user_disabled(True)
+
+            success = await self.coordinator.set_rs485_control(False)
+            if not success:
+                raise HomeAssistantError(
+                    f"Unable to disable RS485 control for {self.coordinator.name}"
+                )
+
+            # Keep the preference even when confirmation fails: it prevents a
+            # concurrent or later reconnect from re-enabling external control
+            # against the user's request. Surface the failed verification to HA
+            # rather than leaving the entity optimistically OFF.
+            if await self.coordinator.rs485_control_enabled() is not False:
+                raise HomeAssistantError(
+                    f"RS485 control could not be verified as disabled for "
+                    f"{self.coordinator.name}"
+                )
+
+            await self.coordinator.async_request_refresh()
+            return
+
         await self.coordinator.write_control(self.definition["key"], self._command_off, do_refresh=True)
 
     @property

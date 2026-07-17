@@ -3,6 +3,7 @@
 ## [1.0.1b2] - 2026-07-17
 
 ### Fixed
+- **RS485 Control Mode switch could get stuck in either direction on Venus v3 batteries** (#92): switching it from OFF to ON now closes and recreates the battery connection before enabling RS485; both transitions use the RS485-specific command and read back register 42000 to confirm the requested state instead of trusting the write acknowledgement.
 - **Queued Modbus gateway compatibility now restores the proven MVEM retry path** (#77): the per-battery opt-in sends each request once per transaction ID with the normal response timeout, then retries failed, timed-out or incomplete transactions up to three times with a fresh ID. This keeps same-ID resends out of queued TCP-to-RTU gateways without giving up MVEM's recovery from occasional short or missing replies.
 
 ## [1.0.1b1] - 2026-07-17
