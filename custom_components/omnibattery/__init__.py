@@ -2331,7 +2331,7 @@ class ChargeDischargeController:
                 })
             elif estimated_house_load > active_target:
                 # House load is below peak limit but above normal target: hold the
-                # current grid level and stop any existing discharge immediately.
+                # current grid level and stop any existing battery command immediately.
                 # Undo excluded-device adjustment so target aligns with real grid reading
                 if self._excluded_included_adjustment > 0:
                     _LOGGER.info(
@@ -2341,7 +2341,7 @@ class ChargeDischargeController:
                     sensor_actual += self._excluded_included_adjustment
                 self.set_setpoint_override("capacity_protection", sensor_actual, priority=10)
                 active_target = self.compute_active_target()
-                if self.previous_power < 0:
+                if self.previous_power != 0:
                     self._capacity_protection_force_idle = True
                 _LOGGER.info(
                     "Capacity Protection ACTIVE: SOC=%.1f%% < %d%%, house_load=%.0fW <= limit=%dW -> idle (target=%.0fW)",
@@ -4585,7 +4585,7 @@ class ChargeDischargeController:
         if self._capacity_protection_force_idle:
             self._capacity_protection_force_idle = False
             _LOGGER.info(
-                "Capacity Protection conserving capacity: stopping existing discharge command"
+                "Capacity Protection conserving capacity: stopping existing battery command"
             )
             for coordinator in self.coordinators:
                 if self._is_active_balance_mode_running(coordinator):
