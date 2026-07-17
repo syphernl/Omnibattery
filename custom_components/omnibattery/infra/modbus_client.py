@@ -17,13 +17,10 @@ from ..const import DEBUG_RAW_MODBUS_READS, SERIAL_BAUDRATE
 
 _LOGGER = logging.getLogger(__name__)
 
-# pymodbus-internal retries per request. Since the pymodbus 3.8 transaction
-# manager rewrite, internal retries re-send the SAME transaction_id, so a late
-# answer from a stalled battery (the v3 MCU queues requests and flushes the
-# replies in a burst) matches the retry and is consumed as valid. Wrapper-level
-# retries minted a new tid per attempt, which guaranteed every flushed reply
-# was discarded with a "transaction_id mismatch, Skipping" error.
+# Standard policy for every model. Since pymodbus 3.8, internal retries reuse
+# the same transaction_id, so late replies still match the outstanding request.
 _PYMODBUS_RETRIES = 2
+_RESPONSE_WINDOW_ATTEMPTS = _PYMODBUS_RETRIES + 1
 
 
 def _backoff_jitter(delay: float) -> float:
@@ -131,7 +128,7 @@ class MarstekModbusClient:
     for async reading/writing and interpreting common data types.
     """
 
-    def __init__(self, host: str, port: int = 502, message_wait_ms: int = 50, timeout: int = 10, is_v3: bool = False, slave_id: int = 1, serial_port: Optional[str] = None):
+    def __init__(self, host: str, port: int = 502, message_wait_ms: int = 50, timeout: int = 10, is_v3: bool = False, slave_id: int = 1, serial_port: Optional[str] = None, queued_gateway_compatibility: bool = False):
         """
         Initialize Modbus client with host, port, message wait time, and timeout.
 
@@ -146,6 +143,9 @@ class MarstekModbusClient:
                 When set, communication uses Modbus RTU over serial instead of
                 TCP and ``host``/``port`` are ignored for the link (discussion
                 #350). None = Modbus TCP (default, unchanged behaviour).
+            queued_gateway_compatibility (bool): Experimental v2/TCP mode that
+                sends each transaction only once. Intended for gateways that
+                queue pymodbus's same-ID resends as independent RTU requests.
         """
         self.host = host
         self.port = port
@@ -154,11 +154,37 @@ class MarstekModbusClient:
         self._host = host
         self._port = port
         self._timeout = timeout
+        # This compatibility mode is deliberately narrow and opt-in. Standard
+        # v2 connections (including direct TCP and Elfin EW11) retain the same
+        # retry policy as main. V3-family firmware needs its internal retries;
+        # serial RTU has no TCP-to-RTU gateway queue to work around.
+        self._queued_gateway_compatibility = bool(
+            queued_gateway_compatibility and not is_v3 and serial_port is None
+        )
+        if self._queued_gateway_compatibility:
+            _LOGGER.info(
+                "Experimental queued-gateway compatibility enabled for %s:%s",
+                host,
+                port,
+            )
+        self._pymodbus_retries = (
+            0 if self._queued_gateway_compatibility else _PYMODBUS_RETRIES
+        )
+        # The opt-in sends once but keeps the standard policy's total response
+        # window open. A slow reply therefore completes the pending request
+        # instead of arriving later as an orphan PDU.
+        self._pymodbus_timeout = (
+            timeout * _RESPONSE_WINDOW_ATTEMPTS
+            if self._queued_gateway_compatibility
+            else timeout
+        )
         # Outer safety-net timeout for one request: must cover all pymodbus
         # internal attempts ((retries+1) x per-attempt timeout) plus margin.
         # Cancelling pymodbus mid-transaction orphans an already-sent request,
         # which recreates the stale-reply mismatch this design avoids.
-        self._request_timeout = timeout * (_PYMODBUS_RETRIES + 1) + 2
+        self._request_timeout = (
+            self._pymodbus_timeout * (self._pymodbus_retries + 1) + 2
+        )
         self._is_v3 = is_v3
         self._serial_port = serial_port
         # pymodbus has no inter-message delay for TCP (message_wait_milliseconds
@@ -182,14 +208,10 @@ class MarstekModbusClient:
 
         Auto-reconnect is disabled: we manage reconnection ourselves by creating
         fresh client instances, which avoids pymodbus's internal reconnect_delay
-        growing up to 300s. Retries live INSIDE pymodbus (not in our loop):
-        since pymodbus 3.8 internal retries re-send the same transaction_id, so
-        a reply that arrives after the per-attempt timeout still matches the
-        retry and is consumed. The old note here ("internal retries each fire a
-        NEW transaction_id", issue #361) described pre-3.8 behaviour and is why
-        retries used to be 0 with the loop in _read_raw owning them — that
-        combination is what produced the "transaction_id mismatch, Skipping"
-        log spam whenever a v3 battery stalled and answered late.
+        growing up to 300s. Standard clients retry inside pymodbus (same
+        transaction_id since 3.8), so a late reply is consumed by the
+        outstanding request. The experimental queued-gateway mode sends a v2
+        TCP request only once while keeping the same total response window.
 
         Serial uses RTU framing at a fixed 115200 8N1 — the rate Marstek's RS485
         link runs at (discussion #350); these are hardware-fixed, not tunable.
@@ -201,14 +223,14 @@ class MarstekModbusClient:
                 bytesize=8,
                 parity="N",
                 stopbits=1,
-                timeout=self._timeout,
-                retries=_PYMODBUS_RETRIES,
+                timeout=self._pymodbus_timeout,
+                retries=self._pymodbus_retries,
             )
         return AsyncModbusTcpClient(
             host=self._host,
             port=self._port,
-            timeout=self._timeout,
-            retries=_PYMODBUS_RETRIES,
+            timeout=self._pymodbus_timeout,
+            retries=self._pymodbus_retries,
             reconnect_delay=0,
             reconnect_delay_max=0,
         )
@@ -325,11 +347,11 @@ class MarstekModbusClient:
         Returns the list of register words (length ``count``) or None on
         failure. Callers decode the words with :func:`decode_registers`.
 
-        Default is a single attempt: retries are pymodbus-internal
-        (_PYMODBUS_RETRIES, same transaction_id per re-send) so late replies
-        from a stalled battery match and are consumed. Looping here would mint
-        a new tid per attempt and turn every late reply into a discarded
-        "transaction_id mismatch".
+        Default is a single wrapper attempt. Retries are pymodbus-internal (same
+        transaction_id per re-send), so late replies match and are consumed.
+        The queued-gateway opt-in disables those internal resends. Looping here
+        would mint a new tid per attempt and turn every late reply into a
+        discarded "transaction_id mismatch".
         """
         if not (0 <= register <= 0xFFFF):
             _LOGGER.error(
