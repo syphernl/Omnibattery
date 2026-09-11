@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **The discharge reserve credits the whole day's sun, not just the sun before the first peak** (#446): the PV credit window ended at the *earliest* claiming slot, so one pre-dawn slot clearing `current price + minimum saving` closed it before sunrise and the credit came out zero however much sun the day held — a 5 kWh battery parked at 48% from 03:37 to 05:45 on a day forecasting 13.9 kWh, importing what it refused to discharge and then discharging it at the same price two hours later. Because the threshold is rebuilt from the live price every cycle, a small price wobble walked that first slot back and forth across dawn, which is why the reserve flipped between held and released ten minutes apart on identical inputs. The claims are now swept in chronological order against a running pool of expected surplus, so each claim draws from the sun that lands before it and no kWh of PV pays for two hours. The room that sun can land in is the room expected at PV time rather than the room right now: the demand served in between leaves the battery and makes space, capped at the usable band. The old cap was self-reinforcing, since reserving kept the SOC high, which kept the room small, which kept the credit small.
+
 ### Added
 
 - **Per-pack SOC on Venus A/D** (#350): six diagnostic sensors (disabled by default, polled every 30 s) read each coupled pack's own SOC, and the populated slots are learned at start-up.
