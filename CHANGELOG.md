@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Dynamic Pricing: running slot stuck after a re-plan that selects nothing** (#642): a re-plan that found no slots cleared the schedule but left the running slot active, so the battery stayed in `grid_charging` at full SOC and never discharged until predictive charging was switched off. The slot is now released in the same cycle and normal PD control takes over. Thanks to @syphernl.
+
 ## [1.5.1b2] - 2026-10-13
 
 ### Fixed
