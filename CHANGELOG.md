@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **Daily Operation timeline: weekly full charge day projected to Max SOC** (PR#680): the projection capped the battery at the configured Max SOC while the planner charges to 100% on the weekly full charge day, so the timeline showed the battery stopping short. It now uses the same 100% ceiling until the weekly charge completes. Thanks to @syphernl.
+- **Daily Operation timeline: weekly full charge day projected to Max SOC** (PR#680): the projection capped the battery at the configured Max SOC while the planner charges to 100% on the weekly full charge day, so the timeline showed the battery stopping short. It now uses the same 100% ceiling until the weekly charge completes, and the next-day extension shown the evening before already charges to 100% from midnight. Thanks to @syphernl.
 
 ## [1.5.1b2] - 2026-10-13
 
