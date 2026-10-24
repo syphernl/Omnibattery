@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **Chronological planning on the autumn DST change** (PR#679): every plan whose horizon crossed the repeated 02:00 hour fell back with "energy interval end must be after start", so Daily Operation showed no plan for the whole day before the change. Quarter-hour boundaries now carry a fixed UTC offset, so the repeated hour sorts after its first pass. Thanks to @syphernl.
+- **Chronological planning on the autumn DST change** (PR#679, #678): every plan whose horizon crossed the repeated 02:00 hour fell back with "energy interval end must be after start", so Daily Operation showed no plan for the whole day before the change. Quarter-hour boundaries now carry a fixed UTC offset, so the repeated hour sorts after its first pass and the quarter across the skipped spring hour lasts 15 minutes instead of 75. Thanks to @syphernl.
 
 ## [1.5.1b2] - 2026-10-13
 
